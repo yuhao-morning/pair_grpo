@@ -14,6 +14,12 @@
    - **HalfCheetah**：种子分成低（约 1600–2100）、高（>2400）两个盆地，三种无 critic 方法掉进去的概率一样。15 个种子在 5M 处的跳出率：pair 5/15，tie 5/15，GRPO 6/15，Fisher p=1.0（见 4.7）。
    - **撤回**：先前"pair 在 HalfCheetah 有天花板""幅度/平局帮助跳出局部最优"这两条结论，来自 5 个种子的运气（pair 的种子 0–4 恰好全在低盆地）。12M 时 pair 1976 vs GRPO 3455 的差距同样只基于这 5 个种子，不能当作天花板的证据。
 6. **对重尾噪声 pair 没有优势**；对对称的比较翻转，方向不变，只是变慢（理论上信号乘 1−2ε）。
+7. **只靠比较训练的 critic 能修掉"同一 t、不同状态"的混杂**（4.8，10 个种子）：
+   - `pcrit_res` 用 Bradley-Terry 从比较学 V(s)，优势 = 实际比较 − 仅凭状态预测的比较。
+     - HalfCheetah：显著好于纯 pair，2203 vs 1483，p=0.013。
+     - Hopper：2110±175，方差最小；探索性检验下高于 PPO（p=0.037）。
+     - HalfCheetah 上仍明显落后 PPO（4495）。
+   - `pcrit_q`（纯模型优势 Q(s,a) − E Q）前 1.2M 步最快，之后持续下降：策略在利用 critic 的误差。
 
 ## 1. 原代码的问题（`pair-grpo-family/all_algos_corrected.py`）
 
@@ -204,10 +210,56 @@ Acrobot 的重尾噪声这几行是修正噪声尺度后重跑的（`results/pha
 - **重尾噪声下 pair 没有可测的优势**，三种方法同样崩。
 - 翻转 10% 代价小；25% 在 LunarLander 上明显变差，在 Acrobot 上有种子学不出来。原因是稀疏任务里少数有信息量的比较一旦被翻转，就可能被错过。
 
+### 4.8 比较训练的 critic（`results/pcrit`，10 个种子，3M 步，判据见 `pcrit_prereg.md`）
+
+所有比较方法只拿到组内同一 t 的 reward-to-go 比较 c ∈ {+1, 0, −1}。PPO 和 GiGPO 用标量奖励。超参全部默认；种子 0 和 100–101 用于试跑和调参，不进入评估。
+
+| | ppo（标量） | gigpo（标量） | pair_step | **pcrit_res** | pcrit_q |
+|---|---|---|---|---|---|
+| HalfCheetah final | **4495±1031** | 337±139 | 1483±163 | 2203±525 | 801±196 |
+| HalfCheetah AUC | **2560±490** | −112±43 | 671±82 | 977±190 | 871±163 |
+| Hopper final | 1765±304 | 1720±388 | 1884±417 | **2110±175** | 511±219 |
+| Hopper AUC | 1487±238 | 1289±198 | 1211±231 | 1460±153 | 775±294 |
+
+**事先约定的主比较：**
+
+| 比较 | HalfCheetah final | HalfCheetah AUC | Hopper final | Hopper AUC |
+|---|---|---|---|---|
+| pcrit_res vs pair_step | **p=0.013**（MW 0.004） | **p=0.006** | p=0.26 | p=0.06 |
+| pcrit_q vs pair_step | 更差 p<0.001 | 更好 p=0.026 | 更差 p<0.001 | 更差 p=0.018 |
+| pcrit_q vs ppo | 更差 p<0.001 | 更差 p<0.001 | 更差 p<0.001 | 更差 p<0.001 |
+
+**事后的探索性比较**（不在事先约定里，只作参考）：pcrit_res vs ppo 在 Hopper 上为 2114 vs 1761（Welch p=0.037，MW p=0.007）；在 HalfCheetah 上为 2196 vs 4488（p=0.001）。
+
+学习曲线（每 0.3M 步的平均）和 critic 在新批次上的比较准确率：
+
+```
+HalfCheetah ppo        -385   290  1239  2105  2765  3246  3620  3960  4252  4482
+HalfCheetah pair_step  -505  -231    74   434   737   969  1115  1249  1374  1480
+HalfCheetah pcrit_res  -486  -202   154   592   948  1270  1534  1767  1977  2191
+HalfCheetah pcrit_q    -445   500  1080  1269  1371  1299  1107   952   772   796   ← 先升后降
+            pcrit_q acc 0.60  0.65  0.66  0.67  0.66  0.67  0.67  0.68  0.70  0.68
+Hopper      pcrit_res   266   632   952  1326  1514  1719  1890  1993  2131  2119
+Hopper      pcrit_q     324   825  1022  1028   912   845   769   652   776   525   ← 先升后降
+```
+
+**解读：**
+- **pcrit_res 有效，原因清楚。** 它的优势仍然以真实的比较结果为准（蒙特卡洛），critic 只用来减去"由状态决定的那部分"。即使 critic 不准，也只会让方差变大，不会把方向带偏。它是本项目第一个在 HalfCheetah 上显著超过纯 pair 的只用比较的方法。
+- **pcrit_q 失败，属于典型的 critic 被策略利用。**
+  - 它的优势完全来自模型，没有真实结果做校正。
+  - critic 的比较准确率一直在 0.67 左右，没有变差，但这个准确率主要反映状态之间的差别，测不到 Q 在动作维度上是否准确。
+  - 只看 1M 步的试跑会得出相反的结论，这是第三次"短跑/少种子"误导。
+- **GiGPO 在连续控制上退化。** 状态几乎从不完全重复，只有 t=0（同一初始状态）能组成锚点组，于是它约等于轨迹级 GRPO。HalfCheetah 上轨迹级方法本来就不行（4.3），这里也一样。审稿人如果要求 GiGPO 作基线，这个结果可以直接回答"它在连续状态上不适用"。
+
+**还没解决的：** HalfCheetah 上只用比较的方法和 PPO 之间仍有约 2 倍差距。
+
 ## 5. 建议的下一步
 
 0. （已完成，结果为否定）HalfCheetah 盆地检验：平局标签没有提高跳出率（4.7）。三值标签如果写进论文，理由只能是"标注更自然、能表达等价"，不能说它帮助探索。
-1. **偏好 critic**：从比较数据学 P(a≻b|s)，用它给每一步打分。目标是在 HalfCheetah 上追平用 critic 的 PPO，同时只用比较。文献检索显示这是目前最空的方向（见 `LITERATURE.md`）。
+1. **偏好 critic**（已做第一版，见 4.8）：pcrit_res 有效，pcrit_q 失败。下一步：
+   - **双重稳健式组合**：A = 实际比较 − 模型预测的比较 + 模型优势。思路同 GAE/DR 估计，既利用 Q 的低方差，又用真实结果纠偏，避免 pcrit_q 那种被策略利用的问题。
+   - **TD 式比较**：在比较模型里引入 bootstrapping，比如比较"r_t + 下一状态"与另一条轨迹，减少 MC 的方差。这是 HalfCheetah 上追平 PPO 最可能的路径。
+   - 把 pcrit_res 放到离散任务（LunarLander、Acrobot）和噪声标签设置下复测。
 2. **vine 分支比较**：作为 (1) 的"无偏、无需学习"的参照，代价是环境步数。
 3. **论文重写**：
    - 删掉 hard 版和 DPO 基线（实现有误），改掉梯度正倍数定理。
@@ -230,6 +282,7 @@ python -m venv ../.venv && ../.venv/bin/pip install numpy torch "gymnasium[mujoc
 ./run_jobs.sh phase_b.py jobs_long.txt 13     # 长训练
 ./run_jobs.sh phase_b.py jobs_softz.txt 13    # HalfCheetah 平局/软化变体
 ./run_jobs.sh phase_b.py jobs_basin.txt 14    # 盆地检验，种子 5–14
+./run_jobs.sh phase_b.py jobs_pcrit.txt 14    # 比较训练的 critic，种子 1–10
 ../.venv/bin/python -I basin.py               # 按 basin_prereg.md 的判据分析
 ../.venv/bin/python summarize.py results/phaseB ppo
 ```

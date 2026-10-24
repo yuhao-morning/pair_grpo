@@ -10,6 +10,9 @@
   soft_step  : 每个 t，mean_j tanh((G_t^i - G_t^j) / (tau * s))，sign 与线性之间的插值
   softz_step : 同上，但尺度用每个 t 组内的 std σ_t；tau→∞ 趋于 grpo_step
   tie_step   : 三值比较，|ΔG_t| < tau * σ_t 判"一样"(0)，其余 ±1
+  gigpo      : 标量；轨迹级 z-score + omega * 完全相同状态组内的 z-score（Feng et al. 2025）
+  pcrit_res  : 只用比较；BT 学 V(s)，优势 = mean_j [c_ij − (2σ(V_i−V_j)−1)]
+  pcrit_q    : 只用比较；BT 学 Q(s,a)，优势 = Q(s,a) − mean_m Q(s,a' ~ π)
 pair_* 只用比较结果；比较可以加噪声：
   --flip eps   每个比较以概率 eps 翻转
   --tnoise sig 比较/打分前给回报加重尾噪声 sig * s * t(1.5)，标量方法看到同样的噪声回报
@@ -29,7 +32,7 @@ from torch.distributions import Categorical, Normal
 
 torch.set_num_threads(1)
 
-ALGOS = ["ppo", "grpo_traj", "pair_traj", "grpo_step", "pair_step", "soft_step", "softz_step", "tie_step"]
+ALGOS = ["ppo", "grpo_traj", "pair_traj", "grpo_step", "pair_step", "soft_step", "softz_step", "tie_step", "gigpo", "pcrit_res", "pcrit_q"]
 
 
 class Actor(nn.Module):
@@ -129,6 +132,11 @@ def main():
     p.add_argument("--flip", type=float, default=0.0)
     p.add_argument("--tnoise", type=float, default=0.0)
     p.add_argument("--tau", type=float, default=0.5)
+    p.add_argument("--omega", type=float, default=1.0)       # gigpo 步级优势的权重
+    p.add_argument("--crit_lr", type=float, default=1e-3)    # pcrit_*：比较训练的 critic
+    p.add_argument("--crit_epochs", type=int, default=4)
+    p.add_argument("--crit_pairs", type=int, default=40000)  # 每次更新最多用多少个比较对
+    p.add_argument("--M", type=int, default=8)               # pcrit_q 的基线采样动作数
     p.add_argument("--tag", default="")
     p.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "results", "phaseB"))
     a = p.parse_args()
@@ -145,6 +153,11 @@ def main():
 
     actor = Actor(obs_dim, act_dim, continuous)
     critic = Critic(obs_dim)
+    pcrit = None
+    if a.algo.startswith("pcrit"):
+        in_dim = obs_dim + (act_dim if a.algo == "pcrit_q" else 0)
+        pcrit = Critic(in_dim)
+        p_opt = optim.Adam(pcrit.parameters(), lr=a.crit_lr)
     a_opt = optim.Adam(actor.parameters(), lr=a.lr)
     c_opt = optim.Adam(critic.parameters(), lr=a.lr)
     onorm = RunningNorm(obs_dim)
@@ -155,10 +168,14 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     f = open(os.path.join(out_dir, f"seed{a.seed}.csv"), "w", newline="")
     w = csv.writer(f); w.writerow(["step", "reward"])
+    if pcrit is not None:   # critic 在新批次上的比较准确率（训练前），不是 seed*.csv，summarize 不会读到
+        acc_f = open(os.path.join(out_dir, f"crit_seed{a.seed}.txt"), "w")
+        acc_f.write("step,pair_acc_before_update\n")
 
     step = 0
     while step < a.steps:
         O, A, LP, ADV, RET = [], [], [], [], []
+        GROUPS = []   # pcrit_*：每组的比较标签和行号，批次收集完再算优势
         n_batch, ep_returns = 0, []
         while n_batch < a.batch:
             # ---- 一组：K 条轨迹，同一初始状态 ----
@@ -220,14 +237,38 @@ def main():
                     adv = pair_matrix(U, mask, a.flip, rng, soft_tau=a.tau, scale=sd)
                 else:
                     adv = pair_matrix(U, mask, a.flip, rng, scale=sd, tie=a.tau)
+            elif a.algo == "gigpo":
+                # GiGPO（Feng et al. 2025）：轨迹级相对优势 + ω × 锚状态组内的相对优势（完全相同的状态才算一组）
+                a_ep = (Utot - Utot.mean()) / (Utot.std() + 1e-8)
+                anchors = {}
+                for i, tr in enumerate(traj):
+                    for t_, o_ in enumerate(tr["o"]):
+                        anchors.setdefault(o_.tobytes(), []).append((i, t_))
+                a_st = np.zeros((a.K, T))
+                for members in anchors.values():
+                    if len(members) > 1:
+                        ii, tt = map(np.array, zip(*members))
+                        g = U[ii, tt]
+                        a_st[ii, tt] = (g - g.mean()) / (g.std() + 1e-8)
+                adv = a_ep[:, None] + a.omega * a_st
             else:
-                adv = np.zeros((a.K, T))   # ppo 之后用 GAE 填
+                adv = np.zeros((a.K, T))   # ppo 之后用 GAE 填，pcrit_* 批次结束后再填
 
+            base = []   # 每条轨迹在本批次里的起始行号
             for i, t in enumerate(traj):
+                base.append(len(O))
                 O += t["o"]; A += t["a"]; LP += t["lp"]
                 ADV.append(adv[i, :lens[i]])
-                if a.algo == "ppo":
-                    RET.append((np.array(t["r"]), t["last"], t["trunc"]))
+            if pcrit is not None:
+                # 只存比较结果 c ∈ {+1,0,−1}（由 oracle 给出），不存回报
+                ci, cj, ct = np.nonzero(np.triu(np.ones((a.K, a.K), bool), 1)[:, :, None] & mask[:, None, :] & mask[None, :, :])
+                c = np.sign(U[ci, ct] - U[cj, ct])
+                if a.flip > 0:
+                    c = np.where(rng.random(len(c)) < a.flip, -c, c)
+                base = np.array(base)
+                GROUPS.append(dict(ci=ci, cj=cj, ct=ct, c=c, base=base, lens=lens, T=T, start=len(ADV) - a.K))
+            if a.algo == "ppo":
+                RET += [(np.array(t["r"]), t["last"], t["trunc"]) for t in traj]
             n_batch += lens.sum()
 
         step += n_batch
@@ -262,6 +303,50 @@ def main():
             adv = (adv - adv.mean()) / (adv.std() + 1e-8)
             ret_t = torch.as_tensor(np.concatenate(rets), dtype=torch.float32)
         else:
+            if pcrit is not None:
+                # ---- 比较训练的 critic：先用旧 critic 算优势，再用本批比较训练 ----
+                if a.algo == "pcrit_q":
+                    enc = (lambda x: x) if continuous else (lambda x: nn.functional.one_hot(x, act_dim).float())
+                    X = torch.cat([o, enc(act_t)], -1)
+                else:
+                    X = o
+                with torch.no_grad():
+                    f_all = pcrit(X).numpy()
+                    if a.algo == "pcrit_q":   # 基线：同一状态下按当前策略采 M 个动作的平均 Q
+                        d = actor.dist(o)
+                        q_base = torch.stack([pcrit(torch.cat([o, enc(d.sample())], -1)) for _ in range(a.M)]).mean(0).numpy()
+                RI, RJ, C = [], [], []
+                for g in GROUPS:
+                    ri, rj, c = g["base"][g["ci"]] + g["ct"], g["base"][g["cj"]] + g["ct"], g["c"]
+                    RI.append(ri); RJ.append(rj); C.append(c)
+                    if a.algo == "pcrit_res":
+                        # 观测到的比较 − 仅凭状态预测的比较，对 j 取平均（反对称）
+                        resid = c - (2.0 / (1.0 + np.exp(-(f_all[ri] - f_all[rj]))) - 1.0)
+                        acc_ = np.zeros((a.K, g["T"])); cnt = np.zeros((a.K, g["T"]))
+                        np.add.at(acc_, (g["ci"], g["ct"]), resid); np.add.at(acc_, (g["cj"], g["ct"]), -resid)
+                        np.add.at(cnt, (g["ci"], g["ct"]), 1); np.add.at(cnt, (g["cj"], g["ct"]), 1)
+                        A_g = acc_ / np.maximum(cnt, 1)
+                    for i in range(a.K):
+                        rows = g["base"][i] + np.arange(g["lens"][i])
+                        if a.algo == "pcrit_res":
+                            ADV[g["start"] + i] = A_g[i, :g["lens"][i]]
+                        else:
+                            ADV[g["start"] + i] = f_all[rows] - q_base[rows]
+                RI, RJ, C = map(np.concatenate, (RI, RJ, C))
+                nz = C != 0
+                acc_f.write(f"{step},{np.mean(np.sign(f_all[RI[nz]] - f_all[RJ[nz]]) == C[nz]):.4f}\n"); acc_f.flush()
+                sel = rng.choice(len(C), min(len(C), a.crit_pairs), replace=False)
+                RI_t, RJ_t = torch.as_tensor(RI[sel]), torch.as_tensor(RJ[sel])
+                Y_t = torch.as_tensor((C[sel] + 1) / 2, dtype=torch.float32)   # 平局 → 0.5
+                for _ in range(a.crit_epochs):
+                    perm = torch.randperm(len(sel))
+                    for s in range(0, len(sel), 1024):
+                        mb = perm[s:s + 1024]
+                        logit = pcrit(X[RI_t[mb]]) - pcrit(X[RJ_t[mb]])
+                        p_loss = nn.functional.binary_cross_entropy_with_logits(logit, Y_t[mb])
+                        p_opt.zero_grad(); p_loss.backward()
+                        nn.utils.clip_grad_norm_(pcrit.parameters(), 0.5)
+                        p_opt.step()
             adv = np.concatenate(ADV)
             adv = adv / (adv.std() + 1e-8)
         adv_t = torch.as_tensor(adv, dtype=torch.float32)
