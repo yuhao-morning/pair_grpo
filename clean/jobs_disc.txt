@@ -1,0 +1,140 @@
+--env LunarLander-v3 --algo pair_step --seed 1 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 1 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 1 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 10 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 10 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 10 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 2 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 2 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 2 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 3 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 3 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 3 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 4 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 4 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 4 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 5 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 5 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 5 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 6 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 6 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 6 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 7 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 7 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 7 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 8 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 8 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 8 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 9 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 9 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pair_step --seed 9 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 1 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 1 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 1 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 10 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 10 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 10 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 2 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 2 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 2 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 3 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 3 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 3 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 4 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 4 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 4 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 5 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 5 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 5 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 6 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 6 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 6 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 7 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 7 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 7 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 8 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 8 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 8 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 9 --steps 2000000 --flip 0.1 --tag f0.1 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 9 --steps 2000000 --flip 0.25 --tag f0.25 --out results/disc
+--env LunarLander-v3 --algo pcrit_res --seed 9 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 1 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 10 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 2 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 3 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 4 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 5 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 6 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 7 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 8 --steps 2000000 --out results/disc
+--env LunarLander-v3 --algo ppo --seed 9 --steps 2000000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 1 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 1 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 1 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 10 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 10 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 10 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 2 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 2 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 2 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 3 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 3 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 3 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 4 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 4 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 4 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 5 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 5 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 5 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 6 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 6 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 6 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 7 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 7 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 7 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 8 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 8 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 8 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 9 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 9 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pair_step --seed 9 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 1 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 1 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 1 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 10 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 10 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 10 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 2 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 2 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 2 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 3 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 3 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 3 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 4 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 4 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 4 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 5 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 5 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 5 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 6 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 6 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 6 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 7 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 7 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 7 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 8 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 8 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 8 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 9 --steps 500000 --flip 0.1 --tag f0.1 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 9 --steps 500000 --flip 0.25 --tag f0.25 --out results/disc
+--env Acrobot-v1 --algo pcrit_res --seed 9 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 1 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 10 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 2 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 3 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 4 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 5 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 6 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 7 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 8 --steps 500000 --out results/disc
+--env Acrobot-v1 --algo ppo --seed 9 --steps 500000 --out results/disc

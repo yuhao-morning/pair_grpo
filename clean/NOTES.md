@@ -21,6 +21,11 @@
      - HalfCheetah 上仍明显落后 PPO（4495）。
    - `pcrit_q`（纯模型优势 Q(s,a) − E Q）前 1.2M 步最快，之后持续下降：策略在利用 critic 的误差。
    - 双重稳健版 `pcrit_dr`（4.9）没有超过 pcrit_res：HalfCheetah 1766 vs 2196，Hopper 打平。按事先判据算"无效"。消融显示，用 Q 推出的状态基线本身就比直接学 V(s) 差。
+8. **pcrit_res 在离散任务上的结论**（4.10，10 个种子，Holm 校正）：
+   - 无噪声时与 pair_step 没有显著差别。
+   - 对标签噪声明显更稳：25% 比较翻转下，LunarLander 259 vs 71（p_holm=0.003），Acrobot −101 vs −316（p_holm=0.036；失败种子 0 vs 5）。
+   - pcrit_res 在 LunarLander 上从无噪声到 25% 翻转几乎没有下降（258 → 259）。
+   - 这对"标注有噪声"的动机是目前最直接的证据，但用的是合成的独立翻转噪声。
 
 ## 1. 原代码的问题（`pair-grpo-family/all_algos_corrected.py`）
 
@@ -289,13 +294,46 @@ Hopper      pcrit_q     324   825  1022  1028   912   845   769   652   776   52
 
 **目前只用比较的最好方法仍是 pcrit_res。** HalfCheetah 上与 PPO 的约 2 倍差距没有缩小。
 
+### 4.10 pcrit_res 在离散任务和噪声标签下（`results/disc`，10 个种子，判据见 `disc_prereg.md`，分析脚本 `disc.py`）
+
+设置：
+- 步数：LunarLander 2M，Acrobot 0.5M。
+- 噪声：每个比较以概率 ε 独立翻转，平局翻转后仍是 0。critic 和优势用同一份带噪标签。
+- 主检验：6 个（2 个环境 × 3 个噪声水平），pcrit_res vs pair_step 的 final，Welch t 检验 + Holm 校正。
+
+| 环境 / 噪声 | ppo（标量） | pcrit_res | pair_step | 差值 | p | p_holm |
+|---|---|---|---|---|---|---|
+| LunarLander 无噪声 | 228±22 | 258±12 | 262±4 | −4 | 0.51 | 1.0 |
+| LunarLander 翻转 10% | – | 252±13 | 251±12 | +1 | 0.92 | 1.0 |
+| LunarLander 翻转 25% | – | **259±6** | 71±79 | +189 | 0.0004 | **0.003** |
+| Acrobot 无噪声 | −82±1 | −86±3（失败 0） | −128±94（失败 1） | +42 | 0.34 | 1.0 |
+| Acrobot 翻转 10% | – | −88±4（失败 0） | −136±93（失败 1） | +47 | 0.28 | 1.0 |
+| Acrobot 翻转 25% | – | **−101±21（失败 0）** | −316±141（失败 5） | +215 | 0.007 | **0.036** |
+
+（失败 = final < −400。辅助指标：LunarLander 翻转 10% 时，pcrit_res 的 AUC 也更高，212 vs 192，p=0.004；未校正。）
+
+**按事先判据：**
+- **"不只在 MuJoCo 上有效"：不成立。** 无噪声时两个离散环境上都没有显著差别，结论写作"离散任务无噪声时无增益"。
+- **"对噪声标签稳健"：成立。** 所有噪声水平上都不显著更差。
+- **"噪声下更好"：成立。** 25% 翻转时两个环境上校正后都显著更好。
+
+**解读（待验证）：**
+- 翻转把每个比较的期望信号乘以 1−2ε（25% 时减半），同时加入噪声。pair_step 的优势直接是带噪比较的平均，信噪比下降一半就学不动了。
+- pcrit_res 的 critic 在大量配对上拟合 V(s)，相当于在许多比较上平均掉了噪声。它减去的"由状态决定的那部分"恰好是 pair_step 优势里方差的大头。
+- 所以信号越弱，这个控制变量越重要。这和 MuJoCo 的结果一致：那里的状态混杂本来就大，无噪声时也有收益。
+
+**局限：**
+- 噪声是独立同分布的合成翻转。真实标注的噪声集中在接近平局、位置偏差、长度偏好等地方，见 `LITERATURE.md` 里的 Coin Flip Judge、Comparative Trap。
+- 下一步应该用相关噪声或真实裁判（LLM 判断）复测，才能支撑"标注有噪声时只用比较也能学好"这一卖点。
+
 ## 5. 建议的下一步
 
 0. （已完成，结果为否定）HalfCheetah 盆地检验：平局标签没有提高跳出率（4.7）。三值标签如果写进论文，理由只能是"标注更自然、能表达等价"，不能说它帮助探索。
 1. **偏好 critic**（已做第一版，见 4.8）：pcrit_res 有效，pcrit_q 失败。下一步：
    - ~~双重稳健式组合~~：已做，无效（4.9）。瓶颈在 Q 推出的基线不如直接学的 V(s)。
    - **TD 式比较**：在比较模型里引入 bootstrapping，比如比较"r_t + 下一状态"与另一条轨迹，减少 MC 的方差。这是 HalfCheetah 上追平 PPO 最可能的路径。
-   - 把 pcrit_res 放到离散任务（LunarLander、Acrobot）和噪声标签设置下复测。
+   - ~~把 pcrit_res 放到离散任务和噪声标签下复测~~：已做（4.10）。无噪声时无增益，25% 翻转下显著更稳。
+   - 用**相关噪声**复测：只在接近平局时翻转、按位置偏好翻转、或用 LLM 裁判给比较。独立翻转是对 pcrit_res 最有利的噪声模型。
 2. **vine 分支比较**：作为 (1) 的"无偏、无需学习"的参照，代价是环境步数。
 3. **论文重写**：
    - 删掉 hard 版和 DPO 基线（实现有误），改掉梯度正倍数定理。
@@ -320,6 +358,8 @@ python -m venv ../.venv && ../.venv/bin/pip install numpy torch "gymnasium[mujoc
 ./run_jobs.sh phase_b.py jobs_basin.txt 14    # 盆地检验，种子 5–14
 ./run_jobs.sh phase_b.py jobs_pcrit.txt 14    # 比较训练的 critic，种子 1–10
 ./run_jobs.sh phase_b.py jobs_dr.txt 14       # 双重稳健与消融，种子 1–10
+./run_jobs.sh phase_b.py jobs_disc.txt 14     # 离散任务 + 噪声标签，种子 1–10
+../.venv/bin/python -I disc.py                # 按 disc_prereg.md 分析
 ../.venv/bin/python -I basin.py               # 按 basin_prereg.md 的判据分析
 ../.venv/bin/python summarize.py results/phaseB ppo
 ```
