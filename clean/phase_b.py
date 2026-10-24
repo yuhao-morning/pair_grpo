@@ -13,6 +13,8 @@
   gigpo      : 标量；轨迹级 z-score + omega * 完全相同状态组内的 z-score（Feng et al. 2025）
   pcrit_res  : 只用比较；BT 学 V(s)，优势 = mean_j [c_ij − (2σ(V_i−V_j)−1)]
   pcrit_q    : 只用比较；BT 学 Q(s,a)，优势 = Q(s,a) − mean_m Q(s,a' ~ π)
+  pcrit_resq : 只用比较；同 pcrit_q 的 Q，优势 = o_i − b_i（真实比较 − Q 推出的状态基线），消融用
+  pcrit_dr   : 双重稳健；采到的动作用 o_i − m_i(a_i)，另采 M 个动作用模型优势 m_i(a') − b_i，权重 1/M
 pair_* 只用比较结果；比较可以加噪声：
   --flip eps   每个比较以概率 eps 翻转
   --tnoise sig 比较/打分前给回报加重尾噪声 sig * s * t(1.5)，标量方法看到同样的噪声回报
@@ -32,7 +34,7 @@ from torch.distributions import Categorical, Normal
 
 torch.set_num_threads(1)
 
-ALGOS = ["ppo", "grpo_traj", "pair_traj", "grpo_step", "pair_step", "soft_step", "softz_step", "tie_step", "gigpo", "pcrit_res", "pcrit_q"]
+ALGOS = ["ppo", "grpo_traj", "pair_traj", "grpo_step", "pair_step", "soft_step", "softz_step", "tie_step", "gigpo", "pcrit_res", "pcrit_q", "pcrit_resq", "pcrit_dr"]
 
 
 class Actor(nn.Module):
@@ -154,8 +156,9 @@ def main():
     actor = Actor(obs_dim, act_dim, continuous)
     critic = Critic(obs_dim)
     pcrit = None
+    qcrit = a.algo in ("pcrit_q", "pcrit_resq", "pcrit_dr")   # critic 输入 (s,a)
     if a.algo.startswith("pcrit"):
-        in_dim = obs_dim + (act_dim if a.algo == "pcrit_q" else 0)
+        in_dim = obs_dim + (act_dim if qcrit else 0)
         pcrit = Critic(in_dim)
         p_opt = optim.Adam(pcrit.parameters(), lr=a.crit_lr)
     a_opt = optim.Adam(actor.parameters(), lr=a.lr)
@@ -305,33 +308,60 @@ def main():
         else:
             if pcrit is not None:
                 # ---- 比较训练的 critic：先用旧 critic 算优势，再用本批比较训练 ----
-                if a.algo == "pcrit_q":
+                if qcrit:
                     enc = (lambda x: x) if continuous else (lambda x: nn.functional.one_hot(x, act_dim).float())
                     X = torch.cat([o, enc(act_t)], -1)
                 else:
                     X = o
                 with torch.no_grad():
                     f_all = pcrit(X).numpy()
-                    if a.algo == "pcrit_q":   # 基线：同一状态下按当前策略采 M 个动作的平均 Q
+                    if qcrit:   # 同一状态下按当前策略采 M 个动作
                         d = actor.dist(o)
-                        q_base = torch.stack([pcrit(torch.cat([o, enc(d.sample())], -1)) for _ in range(a.M)]).mean(0).numpy()
+                        A_s = torch.stack([d.sample() for _ in range(a.M)])                     # [M, N, ...]
+                        Q_s = torch.stack([pcrit(torch.cat([o, enc(x)], -1)) for x in A_s]).numpy()  # [M, N]
+                        q_base = Q_s.mean(0)                                                     # V(s) = E_a' Q(s,a')
+                sig2 = lambda x: 2.0 / (1.0 + np.exp(-x)) - 1.0   # 2σ(x) − 1：预测的比较期望
+                if a.algo == "pcrit_dr":
+                    ADV_m = [None] * len(ADV)   # 采样动作那部分的优势 [M, len]
                 RI, RJ, C = [], [], []
                 for g in GROUPS:
                     ri, rj, c = g["base"][g["ci"]] + g["ct"], g["base"][g["cj"]] + g["ct"], g["c"]
                     RI.append(ri); RJ.append(rj); C.append(c)
+                    idx_i, idx_j = (g["ci"], g["ct"]), (g["cj"], g["ct"])
+                    cnt = np.zeros((a.K, g["T"]))
+                    np.add.at(cnt, idx_i, 1); np.add.at(cnt, idx_j, 1)
+                    cnt = np.maximum(cnt, 1)
+
+                    def agg(v_i, v_j):
+                        """把配对上的量按行平均：v_i 记到 i 行，v_j 记到 j 行。"""
+                        s = np.zeros((a.K, g["T"]))
+                        np.add.at(s, idx_i, v_i); np.add.at(s, idx_j, v_j)
+                        return s / cnt
+
                     if a.algo == "pcrit_res":
                         # 观测到的比较 − 仅凭状态预测的比较，对 j 取平均（反对称）
-                        resid = c - (2.0 / (1.0 + np.exp(-(f_all[ri] - f_all[rj]))) - 1.0)
-                        acc_ = np.zeros((a.K, g["T"])); cnt = np.zeros((a.K, g["T"]))
-                        np.add.at(acc_, (g["ci"], g["ct"]), resid); np.add.at(acc_, (g["cj"], g["ct"]), -resid)
-                        np.add.at(cnt, (g["ci"], g["ct"]), 1); np.add.at(cnt, (g["cj"], g["ct"]), 1)
-                        A_g = acc_ / np.maximum(cnt, 1)
+                        resid = c - sig2(f_all[ri] - f_all[rj])
+                        A_g = agg(resid, -resid)
+                    elif a.algo in ("pcrit_resq", "pcrit_dr"):
+                        # o_i = mean_j c_ij；m_i(a) = mean_j [2σ(Q(s_i,a) − V(s_j)) − 1]；b_i = mean_m m_i(a'_m)
+                        o_g = agg(c, -c)
+                        m_s = np.stack([agg(sig2(Q_s[m, ri] - q_base[rj]), sig2(Q_s[m, rj] - q_base[ri])) for m in range(a.M)])
+                        b_g = m_s.mean(0)
+                        if a.algo == "pcrit_resq":
+                            A_g = o_g - b_g
+                        else:
+                            m_taken = agg(sig2(f_all[ri] - q_base[rj]), sig2(f_all[rj] - q_base[ri]))
+                            A_g = o_g - m_taken          # 采到的动作：真实比较 − 模型对它的预测
+                            Am_g = m_s - b_g[None]       # 采样动作：模型优势，权重 1/M
+                            S_g = o_g - b_g              # 只用来定尺度
                     for i in range(a.K):
                         rows = g["base"][i] + np.arange(g["lens"][i])
-                        if a.algo == "pcrit_res":
-                            ADV[g["start"] + i] = A_g[i, :g["lens"][i]]
-                        else:
+                        if a.algo == "pcrit_q":
                             ADV[g["start"] + i] = f_all[rows] - q_base[rows]
+                        else:
+                            ADV[g["start"] + i] = A_g[i, :g["lens"][i]]
+                        if a.algo == "pcrit_dr":
+                            ADV_m[g["start"] + i] = (Am_g[:, i, :g["lens"][i]], S_g[i, :g["lens"][i]])
                 RI, RJ, C = map(np.concatenate, (RI, RJ, C))
                 nz = C != 0
                 acc_f.write(f"{step},{np.mean(np.sign(f_all[RI[nz]] - f_all[RJ[nz]]) == C[nz]):.4f}\n"); acc_f.flush()
@@ -348,16 +378,35 @@ def main():
                         nn.utils.clip_grad_norm_(pcrit.parameters(), 0.5)
                         p_opt.step()
             adv = np.concatenate(ADV)
-            adv = adv / (adv.std() + 1e-8)
+            if a.algo == "pcrit_dr":
+                # 两部分用同一个尺度：o_i − b_i 的 std（与 pcrit_resq 的优势同尺度）
+                Am = np.concatenate([x[0] for x in ADV_m], axis=1)              # [M, N]
+                scale = np.concatenate([x[1] for x in ADV_m]).std() + 1e-8
+                adv, Am = adv / scale, Am / scale
+            else:
+                adv = adv / (adv.std() + 1e-8)
         adv_t = torch.as_tensor(adv, dtype=torch.float32)
 
         N = len(o)
+        o_u, act_u, old_u, adv_u, w_u, mbs = o, act_t, old_lp, adv_t, None, a.minibatch
+        if a.algo == "pcrit_dr":
+            # 采样动作作为额外的行：权重 1/M；minibatch 放大 (1+M) 倍，保持每个 epoch 的梯度步数不变
+            with torch.no_grad():
+                old_s = [actor.log_prob(o, x) for x in A_s]
+            o_u = torch.cat([o] * (1 + a.M))
+            act_u = torch.cat([act_t] + list(A_s))
+            old_u = torch.cat([old_lp] + old_s)
+            adv_u = torch.cat([adv_t, torch.as_tensor(Am.reshape(-1), dtype=torch.float32)])
+            w_u = torch.cat([torch.ones(N), torch.full((a.M * N,), 1.0 / a.M)])
+            mbs = a.minibatch * (1 + a.M)
+        N_u = len(o_u)
         for _ in range(a.epochs):
-            perm = torch.randperm(N)
-            for s in range(0, N, a.minibatch):
-                mb = perm[s:s + a.minibatch]
-                ratio = torch.exp(actor.log_prob(o[mb], act_t[mb]) - old_lp[mb])
-                loss = -torch.min(ratio * adv_t[mb], torch.clamp(ratio, 1 - a.clip, 1 + a.clip) * adv_t[mb]).mean()
+            perm = torch.randperm(N_u)
+            for s in range(0, N_u, mbs):
+                mb = perm[s:s + mbs]
+                ratio = torch.exp(actor.log_prob(o_u[mb], act_u[mb]) - old_u[mb])
+                surr = torch.min(ratio * adv_u[mb], torch.clamp(ratio, 1 - a.clip, 1 + a.clip) * adv_u[mb])
+                loss = -surr.mean() if w_u is None else -(w_u[mb] * surr).sum() / w_u[mb].sum()
                 a_opt.zero_grad(); loss.backward()
                 nn.utils.clip_grad_norm_(actor.parameters(), 0.5)
                 a_opt.step()

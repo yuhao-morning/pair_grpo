@@ -20,6 +20,7 @@
      - Hopper：2110±175，方差最小；探索性检验下高于 PPO（p=0.037）。
      - HalfCheetah 上仍明显落后 PPO（4495）。
    - `pcrit_q`（纯模型优势 Q(s,a) − E Q）前 1.2M 步最快，之后持续下降：策略在利用 critic 的误差。
+   - 双重稳健版 `pcrit_dr`（4.9）没有超过 pcrit_res：HalfCheetah 1766 vs 2196，Hopper 打平。按事先判据算"无效"。消融显示，用 Q 推出的状态基线本身就比直接学 V(s) 差。
 
 ## 1. 原代码的问题（`pair-grpo-family/all_algos_corrected.py`）
 
@@ -253,11 +254,46 @@ Hopper      pcrit_q     324   825  1022  1028   912   845   769   652   776   52
 
 **还没解决的：** HalfCheetah 上只用比较的方法和 PPO 之间仍有约 2 倍差距。
 
+### 4.9 双重稳健优势（`results/pcrit`，10 个种子，3M 步，判据见 `dr_prereg.md`）
+
+记号：
+- Q 只从比较学到（Bradley-Terry）。
+- V(s) = mean_m Q(s, a'_m)，a'_m ~ π，M=8。
+- m_i(a) = mean_j [2σ(Q(s_i, a) − V(s_j)) − 1]：模型对"状态 i 取动作 a 与 j 比较"的预测。
+- o_i = mean_j c_ij：真实比较；b_i = mean_m m_i(a'_m)：状态基线。
+
+方法：
+- `pcrit_dr`：采到的动作优势为 o_i − m_i(a_i)；另采的 M 个动作优势为 m_i(a'_m) − b_i，权重 1/M。期望梯度等于对 (o_i − b_i) 的梯度，所以无偏。
+- `pcrit_resq`（消融）：只用 o_i − b_i，没有模型项。
+
+字面形式"观测 − 模型预测 + 模型优势"如果只作用在采到的那一个动作上，会化简回 o − b，没有作用。所以模型项必须在多个采样动作上取期望（Q-Prop 的思路）。
+
+| | ppo | pair_step | **pcrit_res** | pcrit_resq | pcrit_dr |
+|---|---|---|---|---|---|
+| HalfCheetah final | 4488±1026 | 1481±162 | **2196±523** | 1582±168 | 1766±359 |
+| HalfCheetah AUC | 2558±490 | 670±82 | **975±190** | 780±51 | 786±135 |
+| Hopper final | 1761±302 | 1881±414 | 2114±171 | 2035±522 | **2189±427** |
+| Hopper AUC | 1485±238 | 1208±231 | **1456±153** | 1333±272 | 1411±195 |
+
+| 比较 | HalfCheetah final | HalfCheetah AUC | Hopper final | Hopper AUC |
+|---|---|---|---|---|
+| dr vs res（主比较） | 更差，p=0.14 | 更差，Welch 0.084，**MW 0.026** | p=0.72 | p=0.68 |
+| dr vs resq（模型项的作用） | p=0.31 | p=0.93 | p=0.61 | p=0.61 |
+
+**按事先判据，DR 无效**：在两个环境上都没有显著好于 pcrit_res，HalfCheetah 上 AUC 反而显著更差（MW）。
+
+解读：
+- **问题出在 critic 的类型，而不是缺少模型项。** pcrit_resq 和 pcrit_dr 用的是同一个 Q，两者没有显著差别。它们都比直接学 V(s) 的 pcrit_res 差：HalfCheetah 上 resq 1582 vs res 2196；Hopper 上 resq 有 2 个种子掉到约 750，方差大得多。用 BT 学 Q(s,a) 再对动作取平均得到的状态基线，比直接学一个 V(s) 更不准。可能的原因有两个：网络容量被动作维度分走了，而且采样 M 个动作本身带来噪声。
+- **模型项不会被策略利用。** pcrit_dr 没有出现 pcrit_q 那种先升后降，学习曲线是单调的，说明真实比较的校正项起了作用。但它带来的方差下降不足以弥补 Q 基线本身的劣势。
+- **可能的补救（未做）**：用单独的 V 网络做基线（pcrit_res 那种），Q 只用于模型项。这样两部分的估计误差不再耦合，但 m_i 和 b_i 需要重新定义，才能保持无偏。
+
+**目前只用比较的最好方法仍是 pcrit_res。** HalfCheetah 上与 PPO 的约 2 倍差距没有缩小。
+
 ## 5. 建议的下一步
 
 0. （已完成，结果为否定）HalfCheetah 盆地检验：平局标签没有提高跳出率（4.7）。三值标签如果写进论文，理由只能是"标注更自然、能表达等价"，不能说它帮助探索。
 1. **偏好 critic**（已做第一版，见 4.8）：pcrit_res 有效，pcrit_q 失败。下一步：
-   - **双重稳健式组合**：A = 实际比较 − 模型预测的比较 + 模型优势。思路同 GAE/DR 估计，既利用 Q 的低方差，又用真实结果纠偏，避免 pcrit_q 那种被策略利用的问题。
+   - ~~双重稳健式组合~~：已做，无效（4.9）。瓶颈在 Q 推出的基线不如直接学的 V(s)。
    - **TD 式比较**：在比较模型里引入 bootstrapping，比如比较"r_t + 下一状态"与另一条轨迹，减少 MC 的方差。这是 HalfCheetah 上追平 PPO 最可能的路径。
    - 把 pcrit_res 放到离散任务（LunarLander、Acrobot）和噪声标签设置下复测。
 2. **vine 分支比较**：作为 (1) 的"无偏、无需学习"的参照，代价是环境步数。
@@ -283,6 +319,7 @@ python -m venv ../.venv && ../.venv/bin/pip install numpy torch "gymnasium[mujoc
 ./run_jobs.sh phase_b.py jobs_softz.txt 13    # HalfCheetah 平局/软化变体
 ./run_jobs.sh phase_b.py jobs_basin.txt 14    # 盆地检验，种子 5–14
 ./run_jobs.sh phase_b.py jobs_pcrit.txt 14    # 比较训练的 critic，种子 1–10
+./run_jobs.sh phase_b.py jobs_dr.txt 14       # 双重稳健与消融，种子 1–10
 ../.venv/bin/python -I basin.py               # 按 basin_prereg.md 的判据分析
 ../.venv/bin/python summarize.py results/phaseB ppo
 ```
