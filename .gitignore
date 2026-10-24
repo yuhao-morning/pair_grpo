@@ -13,5 +13,4 @@ __pycache__/
 *.pyc
 .DS_Store
 .venv/
-results/
 MUJOCO_LOG.TXT

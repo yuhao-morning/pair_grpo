@@ -8,6 +8,8 @@
   grpo_step  : 每个 t，对还活着的轨迹的 reward-to-go G_t 做 z-score
   pair_step  : 每个 t，mean_{j 活着} sign(G_t^i - G_t^j)
   soft_step  : 每个 t，mean_j tanh((G_t^i - G_t^j) / (tau * s))，sign 与线性之间的插值
+  softz_step : 同上，但尺度用每个 t 组内的 std σ_t；tau→∞ 趋于 grpo_step
+  tie_step   : 三值比较，|ΔG_t| < tau * σ_t 判"一样"(0)，其余 ±1
 pair_* 只用比较结果；比较可以加噪声：
   --flip eps   每个比较以概率 eps 翻转
   --tnoise sig 比较/打分前给回报加重尾噪声 sig * s * t(1.5)，标量方法看到同样的噪声回报
@@ -27,7 +29,7 @@ from torch.distributions import Categorical, Normal
 
 torch.set_num_threads(1)
 
-ALGOS = ["ppo", "grpo_traj", "pair_traj", "grpo_step", "pair_step", "soft_step"]
+ALGOS = ["ppo", "grpo_traj", "pair_traj", "grpo_step", "pair_step", "soft_step", "softz_step", "tie_step"]
 
 
 class Actor(nn.Module):
@@ -84,10 +86,13 @@ def discounted_to_go(r, gamma):
     return out
 
 
-def pair_matrix(u, alive, flip, rng, soft_tau=None, scale=1.0):
-    """u: [K, T] 观测到的效用；alive: [K, T] bool。返回 [K, T] 的 mean_{j≠i, alive} cmp(i, j)。"""
+def pair_matrix(u, alive, flip, rng, soft_tau=None, scale=1.0, tie=None):
+    """u: [K, T] 观测到的效用；alive: [K, T] bool。返回 [K, T] 的 mean_{j≠i, alive} cmp(i, j)。
+    tie: 差距小于 tie*scale 时判"一样"(0)，仍然只用三值比较。"""
     d = u[:, None, :] - u[None, :, :]                    # [K, K, T], d[i, j] = u_i - u_j
     c = np.tanh(d / (soft_tau * scale + 1e-8)) if soft_tau else np.sign(d)
+    if tie:
+        c = np.where(np.abs(d) < tie * scale, 0.0, c)
     if flip > 0:                                          # 每个无序对翻转一次，保持反对称
         K, _, T = c.shape
         m = np.triu(rng.random((K, K, T)) < flip, 1)
@@ -187,8 +192,8 @@ def main():
                 G[i, :lens[i]] = discounted_to_go(np.array(t["r"]), a.gamma)
             totals = np.array([sum(t["r"]) for t in traj])
             ep_returns += totals.tolist()
-            if ret_scale is None:
-                ret_scale = max(float(np.std(totals)), 1e-3)
+            if ret_scale is None:   # Acrobot 初期全是 -500，std=0，退回到 |mean| 的 10%
+                ret_scale = max(float(np.std(totals)), 0.1 * abs(float(np.mean(totals))), 1.0)
             U, Utot = G, totals.copy()
             if a.tnoise > 0:   # 标量方法和 pair 方法看到同样的噪声
                 U = G + a.tnoise * ret_scale * rng.standard_t(1.5, G.shape)
@@ -204,6 +209,17 @@ def main():
                 adv = pair_matrix(U, mask, a.flip, rng)
             elif a.algo == "soft_step":
                 adv = pair_matrix(U, mask, a.flip, rng, soft_tau=a.tau, scale=ret_scale)
+            elif a.algo in ("softz_step", "tie_step"):
+                # 尺度用每个 t 组内的 std
+                # softz：tanh(d/(tau*sd))，tau→0 是 sign，tau→∞ 趋于 grpo_step
+                # tie  ：|d| < tau*sd 判"一样"，其余 ±1
+                n = mask.sum(0)
+                mu = (U * mask).sum(0) / np.maximum(n, 1)
+                sd = np.sqrt((((U - mu) ** 2) * mask).sum(0) / np.maximum(n - 1, 1))
+                if a.algo == "softz_step":
+                    adv = pair_matrix(U, mask, a.flip, rng, soft_tau=a.tau, scale=sd)
+                else:
+                    adv = pair_matrix(U, mask, a.flip, rng, scale=sd, tie=a.tau)
             else:
                 adv = np.zeros((a.K, T))   # ppo 之后用 GAE 填
 
