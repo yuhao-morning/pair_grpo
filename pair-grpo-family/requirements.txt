@@ -1,0 +1,9 @@
+torch==2.3.0
+gymnasium[box2d]==0.29.1
+mujoco==2.3.7
+pyyaml
+numpy
+matplotlib
+tensorboard
+tqdm
+pandas

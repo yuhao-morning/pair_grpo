@@ -1,0 +1,7 @@
+__pycache__/
+logs/
+csv_data/
+plots/
+checkpoints/
+*.pyc
+*.log

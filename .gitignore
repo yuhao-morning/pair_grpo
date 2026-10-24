@@ -1,0 +1,14 @@
+# secrets / large / machine-local
+*.ipynb
+@
+pair-grpo-family/GRPO.py
+*.log
+wandb/
+hf_cache/
+pair-grpo-family/\\
+# training outputs (also ignored in pair-grpo-family/.gitignore)
+logs/
+*.pth
+__pycache__/
+*.pyc
+.DS_Store

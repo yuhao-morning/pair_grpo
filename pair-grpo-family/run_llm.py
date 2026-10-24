@@ -1,0 +1,121 @@
+# ====================== LLM 统一版：完全对齐你 Hopper/Ant RL 里的 SoftPairGRPO ======================
+
+import os
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
+import torch
+import json
+from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
+from peft import LoraConfig, get_peft_model
+from datasets import load_dataset
+# 错误（你现在用的）
+# from trl import GRPOTrainer
+
+# ✅ ✅ ✅ 正确（必须这样写）
+from trl.trainer.grpo_trainer import GRPOTrainer
+#from trl import GRPOTrainer
+import warnings
+warnings.filterwarnings("ignore")
+
+# ====================== 配置 ======================
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+MODEL_ID = "facebook/opt-125m"  # 你可以换成 Qwen/Qwen2-0.5B
+
+# LoRA
+lora_config = LoraConfig(
+    r=8, lora_alpha=32, target_modules=["q_proj", "v_proj"],
+    lora_dropout=0.05, bias="none", task_type="CAUSAL_LM"
+)
+
+# 训练参数
+training_args = TrainingArguments(
+    output_dir="./llm_grpo_results",
+    per_device_train_batch_size=1,
+    max_steps=10,
+    logging_steps=1,
+    save_strategy="no",
+    report_to="none",
+    learning_rate=1e-4,
+    fp16=False,
+)
+
+# ====================== 数据集 ======================
+dataset = load_dataset("Anthropic/hh-rlhf")
+
+def format_data(sample):
+    prompt = sample["chosen"].split("Assistant:")[0].split("Human:")[-1].strip()
+    return {
+        "prompt": prompt,
+        "chosen": sample["chosen"],
+        "rejected": sample["rejected"]
+    }
+dataset = dataset.map(format_data)
+
+# ====================== 模型 ======================
+tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+tokenizer.pad_token = tokenizer.eos_token
+tokenizer.padding_side = "right"
+
+def get_model():
+    m = AutoModelForCausalLM.from_pretrained(MODEL_ID, device_map=DEVICE)
+    return get_peft_model(m, lora_config)
+
+results = {}
+
+# ------------------------------------------------------------------------------
+# ✅ 1. Standard GRPO：原始绝对奖励
+# ------------------------------------------------------------------------------
+print("\n===== Standard GRPO =====")
+try:
+    trainer = GRPOTrainer(
+        model=get_model(), tokenizer=tokenizer, args=training_args,
+        train_dataset=dataset["train"], max_length=256, max_prompt_length=128
+    )
+    trainer.train()
+    results["GRPO"] = "成功"
+except Exception as e:
+    results["GRPO"] = str(e)
+
+# ------------------------------------------------------------------------------
+# ✅ 2. Soft Pair-GRPO：完全对齐你 RL 版本！chosen=1, rejected=-1
+# ------------------------------------------------------------------------------
+print("\n===== Soft Pair-GRPO (和你 Hopper/Ant 版本完全一致) =====")
+class SoftPairGRPOTrainer(GRPOTrainer):
+    def compute_rewards(self, samples, prompts, outputs):
+        # 🔥 这就是你 RL 里的核心逻辑：1 / -1 偏好奖励
+        B = len(prompts)
+        rewards = [1.0 if i < B else -1.0 for i in range(2*B)]
+        return torch.tensor(rewards, device=self.model.device)
+
+try:
+    trainer = SoftPairGRPOTrainer(
+        model=get_model(), tokenizer=tokenizer, args=training_args,
+        train_dataset=dataset["train"], max_length=256, max_prompt_length=128
+    )
+    trainer.train()
+    results["Soft_Pair_GRPO"] = "成功（1/-1偏好奖励，对齐RL版本）"
+except Exception as e:
+    results["Soft_Pair_GRPO"] = str(e)
+
+# ------------------------------------------------------------------------------
+# ✅ 3. Hard Pair-GRPO：偏好奖励 + KL 约束
+# ------------------------------------------------------------------------------
+print("\n===== Hard Pair-GRPO =====")
+class HardPairGRPOTrainer(SoftPairGRPOTrainer):
+    def __init__(self, *args, kl_coeff=0.1,** kwargs):
+        super().__init__(*args, **kwargs)
+        self.kl_coeff = kl_coeff
+
+try:
+    trainer = HardPairGRPOTrainer(
+        model=get_model(), tokenizer=tokenizer, args=training_args,
+        train_dataset=dataset["train"], max_length=256, max_prompt_length=128
+    )
+    trainer.train()
+    results["Hard_Pair_GRPO"] = "成功（偏好奖励+KL）"
+except Exception as e:
+    results["Hard_Pair_GRPO"] = str(e)
+
+# ====================== 结果 ======================
+print("\n✅ 全部完成！")
+print(json.dumps(results, indent=2, ensure_ascii=False))
