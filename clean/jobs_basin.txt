@@ -1,0 +1,30 @@
+--env HalfCheetah-v4 --algo pair_step --seed 5 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 5 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 5 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 6 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 6 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 6 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 7 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 7 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 7 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 8 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 8 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 8 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 9 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 9 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 9 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 10 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 10 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 10 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 11 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 11 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 11 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 12 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 12 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 12 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 13 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 13 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 13 --steps 5000000 --tag tau0.25 --out results/basin
+--env HalfCheetah-v4 --algo pair_step --seed 14 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo grpo_step --seed 14 --steps 5000000 --out results/basin
+--env HalfCheetah-v4 --algo tie_step --tau 0.25 --seed 14 --steps 5000000 --tag tau0.25 --out results/basin
