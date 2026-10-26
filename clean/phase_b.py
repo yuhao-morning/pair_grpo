@@ -160,6 +160,15 @@ def rm_group_returns(rm, x, lens, gamma):
     return torch.cat(out)
 
 
+def make_env(name):
+    """MiniGrid：只用 7×7×3 的局部视野图像并展平；其他环境直接 gym.make。"""
+    if name.startswith("MiniGrid"):
+        import minigrid  # noqa: F401  注册环境
+        from minigrid.wrappers import ImgObsWrapper
+        return gym.wrappers.FlattenObservation(ImgObsWrapper(gym.make(name)))
+    return gym.make(name)
+
+
 def full_pair_count(mask):
     """完整预算下的比较次数：每个 t 上活着的轨迹两两比较。"""
     n = mask.sum(0)
@@ -224,7 +233,7 @@ def main():
 
     rng = np.random.default_rng(a.seed)
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
-    envs = [gym.make(a.env) for _ in range(a.K)]
+    envs = [make_env(a.env) for _ in range(a.K)]
     for i, e in enumerate(envs):
         e.action_space.seed(a.seed * 100 + i)
     sp = envs[0].action_space
@@ -256,6 +265,9 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     f = open(os.path.join(out_dir, f"seed{a.seed}.csv"), "w", newline="")
     w = csv.writer(f); w.writerow(["step", "reward"])
+    if a.env.startswith("MiniGrid"):   # 目标导向任务：另记成功率（回报 > 0 即到达目标）
+        sf = open(os.path.join(out_dir, f"success_seed{a.seed}.txt"), "w")
+        sf.write("step,success_rate\n")
     if pcrit is not None or a.algo == "rm_ppo":   # critic 在新批次上的比较准确率（训练前），不是 seed*.csv，summarize 不会读到
         acc_f = open(os.path.join(out_dir, f"crit_seed{a.seed}.txt"), "w")
         acc_f.write("step,pair_acc_before_update\n")
@@ -394,6 +406,8 @@ def main():
         step += n_batch
         mean_ret = float(np.mean(ep_returns))
         w.writerow([step, mean_ret]); f.flush()
+        if a.env.startswith("MiniGrid"):
+            sf.write(f"{step},{np.mean(np.array(ep_returns) > 0):.4f}\n"); sf.flush()
         if budget_log:   # 实际用掉的比较次数占完整预算的比例
             used, full = map(sum, zip(*budget_log))
             bf.write(f"{step},{used},{full},{used / full:.4f}\n"); bf.flush()

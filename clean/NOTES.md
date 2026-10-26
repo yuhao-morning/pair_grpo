@@ -36,6 +36,11 @@
     - **Hopper、Acrobot：** 无校正后显著差别。
     - **规律：** 奖励模型在 LunarLander 和 Acrobot 上只能解释约 70–80% 的比较，而在 MuJoCo 上是 98–100%；rm_ppo 落后的正是前两个环境。
     - **SPO（轨迹级胜率 + critic）** 在 LunarLander 上显著更差；在 Hopper 上意外地最高（2564，未校正 p=0.074，不显著）。
+11. **目标导向的稀疏奖励任务也能学**（4.14，MiniGrid DoorKey-5×5，10 个种子，Holm 校正）：
+    - pair_step 和 pcrit_res 的最终成功率都是 100%，没有失败种子。
+    - 学习速度（AUC）与 PPO、GRPO、rm_ppo 都没有可测差别；pair 的点估计甚至略高于 PPO（0.830 vs 0.803）。
+    - SPO 显著更慢（AUC −22%），最终也到 100%。
+    - 局限：按事先规则只选了 5×5。6×6 和 8×8 上 PPO 自己也有种子完全学不会（探索受限），没有测。
 
 ## 1. 原代码的问题（`pair-grpo-family/all_algos_corrected.py`）
 
@@ -461,6 +466,55 @@ HalfCheetah pcrit_res 的 L10 p=0.026，校正后 0.18，不显著。
 - **SPO 在 Hopper 上最好但方差大（±688）**，可能与 Hopper 的存活结构有关：轨迹级胜率基本由存活时长决定，与真实回报高度一致。这一点没有验证。
 - **所有只用比较的方法在 HalfCheetah 上仍然远低于用标量的 PPO（4488）。**
 
+### 4.14 目标导向稀疏奖励任务（`results/goal`，10 个种子，判据见 `goal_prereg.md`，分析 `goal.py`）
+
+**任务：** MiniGrid DoorKey，捡钥匙 → 开门 → 到达目标。只在到达时给奖励 1 − 0.9·步数/上限，回合长度可变。观测是 7×7×3 局部视野展平。
+
+**环境与步数如何选**（只看 PPO 试跑，规则事先定下：取 PPO 在 1M 步时两个调参种子成功率都 ≥ 0.8 的最大地图）：
+- 5×5 两个种子都在约 0.2M 步时达到 1.0。
+- 6×6、8×8 各有一个种子在 1M 步内几乎为 0，按规则排除。
+- 选定 5×5。PPO 在约 0.3M 步时已饱和，所以正式实验取 500k 步，主指标为 AUC。
+
+| | ppo | grpo_step | pair_step | pcrit_res | rm_ppo | spo |
+|---|---|---|---|---|---|---|
+| AUC（主指标） | 0.803±0.039 | 0.841±0.009 | 0.830±0.011 | 0.833±0.020 | 0.812±0.032 | **0.649±0.080** |
+| 最终成功率 | 0.96 | 1.00 | 1.00 | 1.00 | 0.99 | 1.00 |
+| 失败种子（成功率 < 0.5） | 0 | 0 | 0 | 0 | 0 | 0 |
+
+成功率曲线（每 50k 步一段）：
+
+```
+ppo        0.23 0.76 0.97 1.00 0.97 0.91 0.95 1.00 0.99 0.98
+grpo_step  0.29 0.89 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00
+pair_step  0.25 0.83 1.00 1.00 1.00 1.00 1.00 1.00 1.00 1.00
+pcrit_res  0.26 0.84 0.99 1.00 1.00 1.00 1.00 1.00 1.00 1.00
+rm_ppo     0.23 0.69 0.96 1.00 1.00 1.00 1.00 1.00 0.98 0.99
+spo        0.16 0.35 0.56 0.74 0.89 0.96 1.00 1.00 1.00 1.00
+```
+
+**主检验（AUC，4 个，Holm 校正）：**
+- pair_step − ppo：+3.3%，p=0.17，不显著。
+- pcrit_res − pair_step：+0.4%，p=0.76。
+- rm_ppo − pair_step：−2.2%，p=0.25。
+- **spo − pair_step：−22%，p_holm=0.0025，显著更慢。**
+
+辅助：grpo_step − pair_step +1.3%，p=0.088。
+
+**按事先判据：** "只用比较在目标导向任务上可用"**成立**，pair_step 和 pcrit_res 的最终成功率都是 1.00，失败种子 0。
+
+**与预测的对照：**
+- 都能解：对。
+- pair ≈ grpo：对。
+- pair 比 PPO 低但不超过 15%：错，pair 略高于 PPO（不显著）。PPO 中段有一次成功率下滑（0.91）。
+- rm_ppo ≈ pair：对。
+- SPO 不差：错。最终能到 100%，但学得明显更慢：轨迹级胜率在每一步上给的信用一样，"更早到达"的信号被摊薄了。
+
+**解读：**
+- 稀疏、目标导向、回合长度不定的设定下，"谁更早到达"的比较和标量回报信息量相当，只用比较不吃亏。这正对应你最初关心的 goal-oriented 设定的最简单情形。
+- **局限：**
+  - 只测了 5×5。6×6 和 8×8 上 PPO 自己也有种子学不会，是探索问题，比较信号在"一组全失败"时同样全是平局，帮不上忙。
+  - 更难的目标导向任务（大地图、FetchReach 这类目标条件任务）需要配合探索或 hindsight 方法，属于后续工作。
+
 ## 5. 建议的下一步
 
 0. （已完成，结果为否定）HalfCheetah 盆地检验：平局标签没有提高跳出率（4.7）。三值标签如果写进论文，理由只能是"标注更自然、能表达等价"，不能说它帮助探索。
@@ -501,6 +555,8 @@ python -m venv ../.venv && ../.venv/bin/pip install numpy torch "gymnasium[mujoc
 ../.venv/bin/python -I budget.py              # 按 budget_prereg.md 分析
 ./run_jobs.sh phase_b.py jobs_rm.txt 14       # 奖励模型基线与 SPO，种子 1–10
 ../.venv/bin/python -I rm.py                  # 按 rm_prereg.md 分析
+./run_jobs.sh phase_b.py jobs_goal.txt 14     # 目标导向任务 MiniGrid DoorKey-5x5，种子 1–10（需 pip install minigrid）
+../.venv/bin/python -I goal.py                # 按 goal_prereg.md 分析
 ../.venv/bin/python -I basin.py               # 按 basin_prereg.md 的判据分析
 ../.venv/bin/python summarize.py results/phaseB ppo
 ```
