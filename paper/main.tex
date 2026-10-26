@@ -258,6 +258,29 @@ Acrobot 0.5M   & $-128$ & $-86$  & $-208$ & $-127$ & 0.80 \\
 \subsection{Goal-oriented sparse reward}
 On MiniGrid DoorKey-5$\times$5 (reward only on reaching the goal, variable episode length), the per-step and critic variants reach 100\% success on all seeds; area under the learning curve is not measurably different from PPO, GRPO, or the reward-model route, while SPO is 22\% slower ($p_{\text{Holm}}=0.0025$). Larger maps were excluded by a pre-registered rule because PPO itself fails on some seeds there. \todo{table.}
 
+\subsection{Comparing versus scoring with an LLM judge}
+\label{sec:exp-judge}
+Does a real judge compare more reliably than it scores? Without training, we collected 279 checkpoints from five stages of a LunarLander policy (2{,}046 text descriptions of ``what happened from here on'', 6{,}792 pairs; raw physical quantities, engine use and the outcome, no reward terms) and asked \texttt{gemini-3.5-flash-lite} (minimal thinking, JSON output) to (i) score each description from 0 to 10, (ii) compare two descriptions directly (3 pairs per checkpoint, both orders), or (iii) rank all descriptions of a checkpoint with ties allowed (two orders). The ground truth is the discounted reward-to-go used as the oracle in all other experiments; ties count one half. Pre-registered, with checkpoint-level cluster bootstrap:
+
+\begin{table}[h]
+\centering
+\caption{Effective pairwise accuracy of an LLM judge against the true reward-to-go. $z=|\Delta G|$ divided by the within-checkpoint standard deviation. Total cost \$1.65.}
+\label{tab:judge}
+\small
+\begin{tabular}{lccccccc}
+\toprule
+ & pairs & accuracy & ties & $z<0.5$ & $0.5$--$1$ & $1$--$2$ & $>2$ \\
+\midrule
+score each (all pairs)        & 6792 & 0.565 & 0.45 & 0.53 & 0.56 & 0.56 & 0.63 \\
+rank within group (all pairs) & 6792 & 0.641 & 0.22 & 0.53 & 0.62 & 0.68 & 0.75 \\
+score each (common pairs)     & 823  & 0.582 & 0.46 & 0.54 & 0.61 & 0.58 & 0.62 \\
+compare two (common pairs)    & 823  & 0.653 & 0.08 & 0.54 & 0.64 & 0.70 & 0.75 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Ranking beats scoring by $+7.6$ points (95\% CI $[5.8, 9.5]$) and direct comparison by $+7.1$ $[3.9, 10.4]$. Scores collapse toward the top (40\% of descriptions receive 10), so almost half of the score-derived pairs are ties. Near ties ($z<0.5$) every format is close to chance, which is the noise type of Proposition~\ref{prop:noise}(b). Absolute accuracy is modest; exploratory analysis attributes part of it to discounting (with undiscounted reward-to-go as ground truth the three accuracies rise to 0.61, 0.67, 0.67, and the advantage of comparison persists), and part to a wording problem in our descriptions (episodes that time out while resting on both legs were described as ``still flying''). \todo{rerun with corrected descriptions; add a stronger judge.}
+
 \subsection{Label noise}
 \label{sec:exp-noise}
 \begin{table}[h]
@@ -284,7 +307,7 @@ per-step       & $262$ & $\mathbf{71}$ & $258$ & $250$ & $249$ \\
 %=====================================================================
 \section{Limitations}
 \begin{itemize}
-\item All labels are generated from environment returns. The experiments show that the algorithms do not need reward magnitudes; they do not show learning on a task where no reward can be written down. An experiment with an LLM judge is designed but not run.
+\item All labels are generated from environment returns. The experiments show that the algorithms do not need reward magnitudes; they do not show learning on a task where no reward can be written down. With a real LLM judge we only measured label quality (Section~\ref{sec:exp-judge}), not training.
 \item Groups require $K$ rollouts from a shared initial state, i.e.\ a resettable simulator.
 \item Under stochastic rewards the objective is a win rate, not expected return (Proposition~\ref{prop:skew}).
 \item On HalfCheetah every comparison-only method remains about $2\times$ below PPO with scalar rewards.

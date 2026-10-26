@@ -225,6 +225,7 @@ def main():
     p.add_argument("--rm_buffer", type=int, default=5)       # rm_ppo：保留最近几次更新的比较
     p.add_argument("--rm_epochs", type=int, default=2)       # rm_ppo：每次更新在缓冲区上训练几轮
     p.add_argument("--spo_queue", type=int, default=64)      # spo：比较队列长度 B（论文 10–100）
+    p.add_argument("--save_at", type=int, nargs="*", default=[])  # 在这些步数保存策略（采这一批数据时的参数）
     p.add_argument("--tag", default="")
     p.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "results", "phaseB"))
     a = p.parse_args()
@@ -403,6 +404,10 @@ def main():
                 RET += [(np.array(t["r"]), t["last"], t["trunc"], Utot[i]) for i, t in enumerate(traj)]
             n_batch += lens.sum()
 
+        save_at = sorted(a.save_at) if step == 0 else save_at
+        while save_at and step >= save_at[0]:   # 保存的是采集本批数据的策略，以及当时的观测归一化统计量
+            torch.save(dict(actor=actor.state_dict(), norm=(onorm.n, onorm.mean, onorm.m2), step=step),
+                       os.path.join(out_dir, f"ckpt_seed{a.seed}_{save_at.pop(0)}.pt"))
         step += n_batch
         mean_ret = float(np.mean(ep_returns))
         w.writerow([step, mean_ret]); f.flush()
