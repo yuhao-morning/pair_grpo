@@ -30,6 +30,12 @@
    - LunarLander：只用 1.5% 的比较，两种方法仍保留 98–100% 的性能。
    - HalfCheetah：**"每 10 步比一次、每次比全部配对"（10% 预算）对 pair_step 几乎无损（99%）**；而"每步只做一次随机匹配"（15% 预算）显著下降到 81%。同等预算下，在时间上稀疏、在配对上完整，明显好于反过来。
    - pcrit_res 并不更省比较：在 HalfCheetah 上受预算的伤害反而更大（保留率 64–77%），它在完整预算下的优势在低预算下不再显著。
+10. **"用同样的比较学奖励模型再跑 PPO"并不占优**（4.13，10 个种子，Holm 校正，判定为"相当"）：
+    - **LunarLander：** rm_ppo 显著差于两种 pair 方法（205 vs 262 / 258）。
+    - **HalfCheetah：** rm_ppo 学得更快（AUC 显著），终点与 pcrit_res 相当（2371 vs 2196）。
+    - **Hopper、Acrobot：** 无校正后显著差别。
+    - **规律：** 奖励模型在 LunarLander 和 Acrobot 上只能解释约 70–80% 的比较，而在 MuJoCo 上是 98–100%；rm_ppo 落后的正是前两个环境。
+    - **SPO（轨迹级胜率 + critic）** 在 LunarLander 上显著更差；在 Hopper 上意外地最高（2564，未校正 p=0.074，不显著）。
 
 ## 1. 原代码的问题（`pair-grpo-family/all_algos_corrected.py`）
 
@@ -412,6 +418,49 @@ HalfCheetah pcrit_res 的 L10 p=0.026，校正后 0.18，不显著。
 - **pcrit_res 在低预算下更脆弱。** 一个可能的原因是 critic 每次更新拿到的训练对少了 7–70 倍，而训练 epoch 固定为 4，critic 训练不足。这一点没有验证；如果要在低预算下用 pcrit_res，critic 的训练量应当随预算调整，并且需要单独实验。
 - **对论文的含义：** 局限 2（O(K²T) 比较成本）大幅缓解。在 LunarLander 上，1.5% 的比较就够了；在 HalfCheetah 上，10% 的比较（稀疏时间点 + 完整配对）就能让 pair_step 无损。
 
+### 4.13 奖励模型基线与 SPO（`results/rm`，10 个种子，判据和预测见 `rm_prereg.md`，分析 `rm.py`）
+
+- **rm_ppo：** 与 pair_step 用完全相同的比较。用 Bradley-Terry 学 r̂(s,a)，使 P(i≻j) = σ(Ĝ_t^i − Ĝ_t^j)。缓冲区保留最近 5 次更新的比较，每次训练 2 轮。然后 PPO + critic + GAE。
+- **spo：** Swamy et al. 2024 的 Algorithm 2。与最近 64 条轨迹的队列比较，得分在 [−1, 1]，平均分摊到每一步，然后 PPO + critic + GAE。与原文的差异：用 PPO 而不是 SAC，按轨迹自身长度分摊。第一版实现偏离了原文（只在最后一步给奖励），在 CartPole 上学不动；对照论文改正后才正式运行。
+- 对照组复用已有的种子 1–10。代码改动后，ppo、pcrit_res、pair_step 的输出逐行一致。
+
+| 环境 | ppo（标量） | pair_step | pcrit_res | rm_ppo | spo | 奖励模型准确率（后期） |
+|---|---|---|---|---|---|---|
+| HalfCheetah 3M | 4488±1026 | 1481±162 | 2196±523 | **2371±690** | 1310±363 | 0.99 |
+| Hopper 3M | 1761±302 | 1881±414 | 2114±171 | 1827±162 | **2564±688** | 1.00 |
+| LunarLander 2M | 228±22 | **262±4** | 258±12 | 205±11 | 102±47 | 0.70 |
+| Acrobot 0.5M | −82±1 | −128±94 | **−86±3** | −208±110 | −127±94 | 0.80 |
+
+**A 族（rm_ppo vs pair 方法，8 个，Holm）：**
+
+| 环境 | vs pair_step | vs pcrit_res |
+|---|---|---|
+| HalfCheetah | +889，p=0.018，p_holm=0.088；AUC p=0.0006 | +174，p=0.65 |
+| Hopper | −53，p=0.79 | −286，p=0.013，p_holm=0.079 |
+| LunarLander | **−57，p_holm<0.001** | **−53，p_holm<0.001** |
+| Acrobot | −81，p=0.22（MW 0.002） | −123，p=0.033，p_holm=0.13 |
+
+**B 族（spo vs pair_step，4 个，Holm）：** 只有 LunarLander 显著更差（−159，p_holm<0.001）。Hopper +683（p=0.074）；HalfCheetah −171（AUC 上显著更差）；Acrobot 打平。
+
+**按事先判据：判定为"相当"。**
+- rm_ppo 没有在任何环境上同时显著好于两种 pair 方法。
+- 它在 LunarLander 上显著更差；其余 3 个环境校正后无显著差别。
+
+**与预测的对照：**
+- HalfCheetah 上 rm_ppo 好于 pair_step、接近 pcrit_res：方向对，但校正后不显著。
+- Hopper 上 rm_ppo 不如 pcrit_res：方向对，校正后不显著。
+- LunarLander 和 Acrobot 上与 pair 相近：**错**，rm_ppo 更差。
+- SPO 在 HalfCheetah 上很差：对。在 LunarLander 上中等：实际更差。Hopper 上表现最好，没有预料到。
+
+**解读：**
+- **奖励模型的表现取决于"比较能否被一个逐步奖励解释"。**
+  - MuJoCo 的真实奖励是平滑的逐步量，奖励模型能解释 98–100% 的比较，rm_ppo 因为有稠密奖励加 critic 学得更快。
+  - LunarLander 的回报由大额终局奖惩（着陆 +100、坠毁 −100）和姿态塑形组成，Acrobot 是稀疏的 −1 直到成功；奖励模型只能解释 70–80% 的比较，PPO 学的是一个有偏的奖励。
+  - pair 方法直接用比较结果，不经过"拟合一个奖励"这一步，所以不受影响。
+- **pcrit_res 从来没有显著差于 rm_ppo，而在 LunarLander 上显著更好**，同时它不需要单独的奖励模型和标签缓冲区。这是"直接用比较做策略梯度"相对"先学奖励"的一个可以写进论文的结果，前提是如实报告 HalfCheetah 上 rm_ppo 学得更快。
+- **SPO 在 Hopper 上最好但方差大（±688）**，可能与 Hopper 的存活结构有关：轨迹级胜率基本由存活时长决定，与真实回报高度一致。这一点没有验证。
+- **所有只用比较的方法在 HalfCheetah 上仍然远低于用标量的 PPO（4488）。**
+
 ## 5. 建议的下一步
 
 0. （已完成，结果为否定）HalfCheetah 盆地检验：平局标签没有提高跳出率（4.7）。三值标签如果写进论文，理由只能是"标注更自然、能表达等价"，不能说它帮助探索。
@@ -450,6 +499,8 @@ python -m venv ../.venv && ../.venv/bin/pip install numpy torch "gymnasium[mujoc
 ../.venv/bin/python -I corr.py                # 按 corr_prereg.md 分析
 ./run_jobs.sh phase_b.py jobs_budget.txt 14   # 比较预算，种子 1–10
 ../.venv/bin/python -I budget.py              # 按 budget_prereg.md 分析
+./run_jobs.sh phase_b.py jobs_rm.txt 14       # 奖励模型基线与 SPO，种子 1–10
+../.venv/bin/python -I rm.py                  # 按 rm_prereg.md 分析
 ../.venv/bin/python -I basin.py               # 按 basin_prereg.md 的判据分析
 ../.venv/bin/python summarize.py results/phaseB ppo
 ```

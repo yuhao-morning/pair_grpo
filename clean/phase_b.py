@@ -14,6 +14,8 @@
   pcrit_res  : 只用比较；BT 学 V(s)，优势 = mean_j [c_ij − (2σ(V_i−V_j)−1)]
   pcrit_q    : 只用比较；BT 学 Q(s,a)，优势 = Q(s,a) − mean_m Q(s,a' ~ π)
   pcrit_resq : 只用比较；同 pcrit_q 的 Q，优势 = o_i − b_i（真实比较 − Q 推出的状态基线），消融用
+  rm_ppo     : 用同样的比较以 BT 学奖励模型 r̂(s,a)，再跑 PPO + critic + GAE（Christiano 式基线）
+  spo        : Swamy et al. 2024：与最近 B 条轨迹的队列比较总回报，得分平均分摊到每一步，再跑 PPO
   pcrit_dr   : 双重稳健；采到的动作用 o_i − m_i(a_i)，另采 M 个动作用模型优势 m_i(a') − b_i，权重 1/M
 pair_* 只用比较结果；比较预算用 --pairs_per_t / --every 控制（见 sample_pairs）；比较可以加噪声（--noise 选相关噪声 tie/pos/tiepos，见 noisy_labels）：
   --flip eps   每个比较以概率 eps 翻转
@@ -34,7 +36,8 @@ from torch.distributions import Categorical, Normal
 
 torch.set_num_threads(1)
 
-ALGOS = ["ppo", "grpo_traj", "pair_traj", "grpo_step", "pair_step", "soft_step", "softz_step", "tie_step", "gigpo", "pcrit_res", "pcrit_q", "pcrit_resq", "pcrit_dr"]
+ALGOS = ["ppo", "grpo_traj", "pair_traj", "grpo_step", "pair_step", "soft_step", "softz_step", "tie_step", "gigpo", "pcrit_res", "pcrit_q", "pcrit_resq", "pcrit_dr", "rm_ppo", "spo"]
+CRITIC_ALGOS = ("ppo", "rm_ppo", "spo")   # 用 critic + GAE 的方法
 
 
 class Actor(nn.Module):
@@ -145,6 +148,18 @@ def sample_pairs(mask, r, L, rng):
     return np.concatenate(CI), np.concatenate(CJ), np.concatenate(CT)
 
 
+def rm_group_returns(rm, x, lens, gamma):
+    """奖励模型对一组轨迹的折扣 reward-to-go。x: [n, in_dim]，按轨迹顺序拼接；返回 [n]（float64，可求导）。"""
+    r = rm(x).double()
+    out, pos = [], 0
+    for n in lens:
+        w = gamma ** torch.arange(n, dtype=torch.float64)
+        seg = r[pos:pos + n] * w
+        out.append(torch.flip(torch.cumsum(torch.flip(seg, [0]), 0), [0]) / w)   # G_t = Σ_{k≥t} γ^{k−t} r_k
+        pos += n
+    return torch.cat(out)
+
+
 def full_pair_count(mask):
     """完整预算下的比较次数：每个 t 上活着的轨迹两两比较。"""
     n = mask.sum(0)
@@ -198,6 +213,9 @@ def main():
     p.add_argument("--crit_epochs", type=int, default=4)
     p.add_argument("--crit_pairs", type=int, default=40000)  # 每次更新最多用多少个比较对
     p.add_argument("--M", type=int, default=8)               # pcrit_q 的基线采样动作数
+    p.add_argument("--rm_buffer", type=int, default=5)       # rm_ppo：保留最近几次更新的比较
+    p.add_argument("--rm_epochs", type=int, default=2)       # rm_ppo：每次更新在缓冲区上训练几轮
+    p.add_argument("--spo_queue", type=int, default=64)      # spo：比较队列长度 B（论文 10–100）
     p.add_argument("--tag", default="")
     p.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "results", "phaseB"))
     a = p.parse_args()
@@ -222,6 +240,12 @@ def main():
         in_dim = obs_dim + (act_dim if qcrit else 0)
         pcrit = Critic(in_dim)
         p_opt = optim.Adam(pcrit.parameters(), lr=a.crit_lr)
+    enc = (lambda x: x) if continuous else (lambda x: nn.functional.one_hot(x, act_dim).float())
+    if a.algo == "rm_ppo":   # 从比较学的奖励模型 r(s,a)，配一个最近若干次更新的比较缓冲区
+        rm = Critic(obs_dim + act_dim)
+        rm_opt = optim.Adam(rm.parameters(), lr=a.crit_lr)
+        rm_buf = []
+    spo_q = []   # spo：最近 B 条轨迹的（可能带噪的）总回报
     a_opt = optim.Adam(actor.parameters(), lr=a.lr)
     c_opt = optim.Adam(critic.parameters(), lr=a.lr)
     onorm = RunningNorm(obs_dim)
@@ -232,7 +256,7 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     f = open(os.path.join(out_dir, f"seed{a.seed}.csv"), "w", newline="")
     w = csv.writer(f); w.writerow(["step", "reward"])
-    if pcrit is not None:   # critic 在新批次上的比较准确率（训练前），不是 seed*.csv，summarize 不会读到
+    if pcrit is not None or a.algo == "rm_ppo":   # critic 在新批次上的比较准确率（训练前），不是 seed*.csv，summarize 不会读到
         acc_f = open(os.path.join(out_dir, f"crit_seed{a.seed}.txt"), "w")
         acc_f.write("step,pair_acc_before_update\n")
     if a.noise != "iid":
@@ -347,7 +371,7 @@ def main():
                 base.append(len(O))
                 O += t["o"]; A += t["a"]; LP += t["lp"]
                 ADV.append(adv[i, :lens[i]])
-            if pcrit is not None:
+            if pcrit is not None or a.algo == "rm_ppo":
                 # 只存比较结果 c ∈ {+1,0,−1}（由 oracle 给出），不存回报
                 if full_budget:
                     ci, cj, ct = np.nonzero(np.triu(np.ones((a.K, a.K), bool), 1)[:, :, None] & mask[:, None, :] & mask[None, :, :])
@@ -363,8 +387,8 @@ def main():
                     noise_log.append((np.sign(U[ci, ct] - U[cj, ct]), c))
                 base = np.array(base)
                 GROUPS.append(dict(ci=ci, cj=cj, ct=ct, c=c, base=base, lens=lens, T=T, start=len(ADV) - a.K))
-            if a.algo == "ppo":
-                RET += [(np.array(t["r"]), t["last"], t["trunc"]) for t in traj]
+            if a.algo in CRITIC_ALGOS:   # 第 4 项是（可能带噪的）轨迹总回报，spo 只用它来做比较
+                RET += [(np.array(t["r"]), t["last"], t["trunc"], Utot[i]) for i, t in enumerate(traj)]
             n_batch += lens.sum()
 
         step += n_batch
@@ -388,11 +412,55 @@ def main():
         with torch.no_grad():
             old_lp = actor.log_prob(o, act_t)   # 观测归一化变了，重新算 old logp，保证 ratio 从 1 开始
 
-        if a.algo == "ppo":
+        if a.algo == "spo":
+            # SPO（Swamy et al. 2024，Algorithm 2）：逐条轨迹与最近 B 条轨迹的队列比较，
+            # 得分 = mean_q 𝒫(ξ, ξ_q) ∈ [−1, 1]，再平均分摊到该轨迹的每一步；比完把它推入队列（FIFO）
+            RET_new = []
+            for r, last, trunc, u in RET:
+                score = np.mean(np.sign(u - np.array(spo_q))) if spo_q else 0.0
+                RET_new.append((np.full(len(r), score / len(r)), last, False, u))
+                spo_q.append(u)
+                spo_q = spo_q[-a.spo_queue:]
+            RET = RET_new
+        if a.algo == "rm_ppo":
+            # ---- 奖励模型：只用比较训练，PPO 用它给的奖励 ----
+            X_b = torch.cat([o, enc(act_t)], -1)
+            new = [dict(obs=O[g["base"][0]:g["base"][0] + g["lens"].sum()], act=act_t[g["base"][0]:g["base"][0] + g["lens"].sum()],
+                        lens=g["lens"], ri=g["base"][g["ci"]] - g["base"][0] + g["ct"],
+                        rj=g["base"][g["cj"]] - g["base"][0] + g["ct"], c=g["c"]) for g in GROUPS]
+            with torch.no_grad():   # 训练前在新批次比较上的准确率
+                hit = tot_ = 0
+                for b in new:
+                    G = rm_group_returns(rm, torch.cat([torch.as_tensor(onorm(b["obs"]), dtype=torch.float32), enc(b["act"])], -1), b["lens"], a.gamma).numpy()
+                    nz = b["c"] != 0
+                    hit += np.sum(np.sign(G[b["ri"][nz]] - G[b["rj"][nz]]) == b["c"][nz]); tot_ += nz.sum()
+                acc_f.write(f"{step},{hit / max(tot_, 1):.4f}\n"); acc_f.flush()
+            rm_buf.append(new)
+            rm_buf = rm_buf[-a.rm_buffer:]
+            groups_all = [b for upd in rm_buf for b in upd]
+            for _ in range(a.rm_epochs):
+                for k in np.random.permutation(len(groups_all)):
+                    b = groups_all[k]
+                    G = rm_group_returns(rm, torch.cat([torch.as_tensor(onorm(b["obs"]), dtype=torch.float32), enc(b["act"])], -1), b["lens"], a.gamma)
+                    logit = (G[b["ri"]] - G[b["rj"]]).float()
+                    y = torch.as_tensor((b["c"] + 1) / 2, dtype=torch.float32)   # 平局 → 0.5
+                    loss_rm = nn.functional.binary_cross_entropy_with_logits(logit, y)
+                    rm_opt.zero_grad(); loss_rm.backward()
+                    nn.utils.clip_grad_norm_(rm.parameters(), 0.5)
+                    rm_opt.step()
+            with torch.no_grad():
+                r_hat = rm(X_b).numpy()
+            r_hat = r_hat / (r_hat.std() + 1e-8)   # 只缩放、不平移：平移会改变有终止的任务里的最优策略
+            pos_ = 0
+            RET_new = []
+            for r, last, trunc, u in RET:
+                RET_new.append((r_hat[pos_:pos_ + len(r)], last, trunc, u)); pos_ += len(r)
+            RET = RET_new
+        if a.algo in CRITIC_ALGOS:
             with torch.no_grad():
                 v_all = critic(o).numpy()
             advs, rets, pos = [], [], 0
-            for r, last, trunc in RET:
+            for r, last, trunc, _ in RET:
                 n = len(r)
                 v = v_all[pos:pos + n]; pos += n
                 with torch.no_grad():
@@ -512,7 +580,7 @@ def main():
                 a_opt.zero_grad(); loss.backward()
                 nn.utils.clip_grad_norm_(actor.parameters(), 0.5)
                 a_opt.step()
-                if a.algo == "ppo":
+                if a.algo in CRITIC_ALGOS:
                     v_loss = nn.functional.mse_loss(critic(o[mb]), ret_t[mb])
                     c_opt.zero_grad(); v_loss.backward()
                     nn.utils.clip_grad_norm_(critic.parameters(), 0.5)
