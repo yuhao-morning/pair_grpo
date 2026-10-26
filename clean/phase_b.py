@@ -15,7 +15,7 @@
   pcrit_q    : 只用比较；BT 学 Q(s,a)，优势 = Q(s,a) − mean_m Q(s,a' ~ π)
   pcrit_resq : 只用比较；同 pcrit_q 的 Q，优势 = o_i − b_i（真实比较 − Q 推出的状态基线），消融用
   pcrit_dr   : 双重稳健；采到的动作用 o_i − m_i(a_i)，另采 M 个动作用模型优势 m_i(a') − b_i，权重 1/M
-pair_* 只用比较结果；比较可以加噪声：
+pair_* 只用比较结果；比较可以加噪声（--noise 选相关噪声 tie/pos/tiepos，见 noisy_labels）：
   --flip eps   每个比较以概率 eps 翻转
   --tnoise sig 比较/打分前给回报加重尾噪声 sig * s * t(1.5)，标量方法看到同样的噪声回报
 所有非 ppo 方法最后只除以 batch std（不再中心化），保证步长可比，只有"形状"不同。
@@ -109,6 +109,30 @@ def pair_matrix(u, alive, flip, rng, soft_tau=None, scale=1.0, tie=None):
     return np.where(cnt > 0, (c * valid).sum(1) / np.maximum(cnt, 1), 0.0)
 
 
+def noisy_labels(d, s, kind, rng, beta=0.44, tau_n=0.85):
+    """相关噪声下的比较标签。d = U_i − U_j（i 是配对里先呈现的那个），s = 该时间步组内 std。
+    tie   : 以概率 1 − σ(|z|/tau_n) 翻转，z = d/s；越接近平局越容易错（平均翻转率 ≈ 25%）
+    pos   : 以概率 beta 直接选先呈现的 i（+1），否则如实；beta=0.44 对应 72% 选第一个
+    tiepos: 以概率 2(1 − σ(|z|/tau_n)) "拿不准"，拿不准就选 i；翻转率与 tie 相同，但方向总偏向 i
+    """
+    c = np.sign(d)
+    z = np.abs(d) / (s + 1e-8)
+    if kind == "tie":
+        c = np.where(rng.random(len(c)) < 1 - 1 / (1 + np.exp(-z / tau_n)), -c, c)
+    elif kind == "pos":
+        c = np.where(rng.random(len(c)) < beta, 1.0, c)
+    elif kind == "tiepos":
+        c = np.where(rng.random(len(c)) < 2 * (1 - 1 / (1 + np.exp(-z / tau_n))), 1.0, c)
+    return c
+
+
+def sd_t(u, alive):
+    """每个 t，活着的轨迹之间的 std。"""
+    n = alive.sum(0)
+    mu = (u * alive).sum(0) / np.maximum(n, 1)
+    return np.sqrt((((u - mu) ** 2) * alive).sum(0) / np.maximum(n - 1, 1))
+
+
 def zscore_masked(u, alive):
     """每个 t，对活着的轨迹做 z-score；少于 2 条活着则为 0。"""
     n = alive.sum(0)
@@ -134,6 +158,9 @@ def main():
     p.add_argument("--flip", type=float, default=0.0)
     p.add_argument("--tnoise", type=float, default=0.0)
     p.add_argument("--tau", type=float, default=0.5)
+    p.add_argument("--noise", default="iid", choices=["iid", "tie", "pos", "tiepos"])  # iid 用 --flip
+    p.add_argument("--beta", type=float, default=0.44)       # pos 噪声：选第一个的概率
+    p.add_argument("--tau_n", type=float, default=0.85)      # tie/tiepos 噪声的尺度
     p.add_argument("--omega", type=float, default=1.0)       # gigpo 步级优势的权重
     p.add_argument("--crit_lr", type=float, default=1e-3)    # pcrit_*：比较训练的 critic
     p.add_argument("--crit_epochs", type=int, default=4)
@@ -174,11 +201,15 @@ def main():
     if pcrit is not None:   # critic 在新批次上的比较准确率（训练前），不是 seed*.csv，summarize 不会读到
         acc_f = open(os.path.join(out_dir, f"crit_seed{a.seed}.txt"), "w")
         acc_f.write("step,pair_acc_before_update\n")
+    if a.noise != "iid":
+        nf = open(os.path.join(out_dir, f"noise_seed{a.seed}.txt"), "w")
+        nf.write("step,flip_rate_nontie,tie_to_first,first_rate\n")
 
     step = 0
     while step < a.steps:
         O, A, LP, ADV, RET = [], [], [], [], []
         GROUPS = []   # pcrit_*：每组的比较标签和行号，批次收集完再算优势
+        noise_log = []   # 相关噪声：(真实符号, 给出的标签)，用来记录实际翻转率
         n_batch, ep_returns = 0, []
         while n_batch < a.batch:
             # ---- 一组：K 条轨迹，同一初始状态 ----
@@ -225,8 +256,17 @@ def main():
                 adv = np.repeat(pair_matrix(Utot[:, None], np.ones((a.K, 1), bool), a.flip, rng), T, 1)
             elif a.algo == "grpo_step":
                 adv = zscore_masked(U, mask)
-            elif a.algo == "pair_step":
+            elif a.algo == "pair_step" and a.noise == "iid":
                 adv = pair_matrix(U, mask, a.flip, rng)
+            elif a.algo == "pair_step":
+                # 相关噪声：逐对生成标签（i<j，i 先呈现），再对活着的 j 取平均
+                ci, cj, ct = np.nonzero(np.triu(np.ones((a.K, a.K), bool), 1)[:, :, None] & mask[:, None, :] & mask[None, :, :])
+                c = noisy_labels(U[ci, ct] - U[cj, ct], sd_t(U, mask)[ct], a.noise, rng, a.beta, a.tau_n)
+                noise_log.append((np.sign(U[ci, ct] - U[cj, ct]), c))
+                s_ = np.zeros((a.K, T)); n_ = np.zeros((a.K, T))
+                np.add.at(s_, (ci, ct), c); np.add.at(s_, (cj, ct), -c)
+                np.add.at(n_, (ci, ct), 1); np.add.at(n_, (cj, ct), 1)
+                adv = s_ / np.maximum(n_, 1)
             elif a.algo == "soft_step":
                 adv = pair_matrix(U, mask, a.flip, rng, soft_tau=a.tau, scale=ret_scale)
             elif a.algo in ("softz_step", "tie_step"):
@@ -265,9 +305,13 @@ def main():
             if pcrit is not None:
                 # 只存比较结果 c ∈ {+1,0,−1}（由 oracle 给出），不存回报
                 ci, cj, ct = np.nonzero(np.triu(np.ones((a.K, a.K), bool), 1)[:, :, None] & mask[:, None, :] & mask[None, :, :])
-                c = np.sign(U[ci, ct] - U[cj, ct])
-                if a.flip > 0:
-                    c = np.where(rng.random(len(c)) < a.flip, -c, c)
+                if a.noise == "iid":
+                    c = np.sign(U[ci, ct] - U[cj, ct])
+                    if a.flip > 0:
+                        c = np.where(rng.random(len(c)) < a.flip, -c, c)
+                else:
+                    c = noisy_labels(U[ci, ct] - U[cj, ct], sd_t(U, mask)[ct], a.noise, rng, a.beta, a.tau_n)
+                    noise_log.append((np.sign(U[ci, ct] - U[cj, ct]), c))
                 base = np.array(base)
                 GROUPS.append(dict(ci=ci, cj=cj, ct=ct, c=c, base=base, lens=lens, T=T, start=len(ADV) - a.K))
             if a.algo == "ppo":
@@ -277,6 +321,12 @@ def main():
         step += n_batch
         mean_ret = float(np.mean(ep_returns))
         w.writerow([step, mean_ret]); f.flush()
+        if noise_log:   # 实际翻转率（真实非平局中标签错的比例）、平局被判 +1 的比例、全部标签里选第一个的比例
+            tr_, lb_ = map(np.concatenate, zip(*noise_log))
+            nzt = tr_ != 0
+            nf.write(f"{step},{np.mean(lb_[nzt] != tr_[nzt]):.4f},"
+                     f"{np.mean(lb_[~nzt] == 1) if (~nzt).any() else float('nan'):.4f},{np.mean(lb_ == 1):.4f}\n")
+            nf.flush()
 
         O = np.array(O)
         onorm.update(O)          # 用旧统计量采样，更新后统一用新统计量训练（各方法相同）
