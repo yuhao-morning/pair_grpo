@@ -26,6 +26,10 @@
    - 对标签噪声明显更稳：25% 比较翻转下，LunarLander 259 vs 71（p_holm=0.003），Acrobot −101 vs −316（p_holm=0.036；失败种子 0 vs 5）。
    - pcrit_res 在 LunarLander 上从无噪声到 25% 翻转几乎没有下降（258 → 259）。
    - **但这个优势只在独立翻转噪声下成立**（4.11）。换成更接近真实裁判的相关噪声（错误集中在平局附近、位置偏好 72%），翻转率同样约 25%，pair_step 自己几乎不受影响（LunarLander 249–258），pcrit_res 不再显著更好。论文里不能把 4.10 写成"对真实标注噪声更稳"。
+9. **比较预算可以大幅压缩**（4.12，10 个种子，Holm 校正）：
+   - LunarLander：只用 1.5% 的比较，两种方法仍保留 98–100% 的性能。
+   - HalfCheetah：**"每 10 步比一次、每次比全部配对"（10% 预算）对 pair_step 几乎无损（99%）**；而"每步只做一次随机匹配"（15% 预算）显著下降到 81%。同等预算下，在时间上稀疏、在配对上完整，明显好于反过来。
+   - pcrit_res 并不更省比较：在 HalfCheetah 上受预算的伤害反而更大（保留率 64–77%），它在完整预算下的优势在低预算下不再显著。
 
 ## 1. 原代码的问题（`pair-grpo-family/all_algos_corrected.py`）
 
@@ -368,6 +372,46 @@ Hopper      pcrit_q     324   825  1022  1028   912   845   769   652   776   52
    在近平局 / 位置偏好噪声下它没有优势，在 Acrobot 上还可能更差。
 3. 4.10 的结论必须连同 4.11 一起报告，否则会夸大 pcrit_res 的抗噪能力。
 
+### 4.12 比较预算（`results/budget`，10 个种子，判据和预测见 `budget_prereg.md`，分析 `budget.py`）
+
+完整预算下，每组每个时间步比较全部 28 对。三个降预算条件：
+- `r1`：每个 t 做一次随机完美匹配，O(K)。
+- `L10`：只在每 10 步比较全部配对（比从该时刻起的 reward-to-go），窗口内的动作共用窗口起点的优势。
+- `r1L10`：两者叠加。
+
+full 复用 `results/disc`（LunarLander）和 `results/pcrit`（HalfCheetah）的种子 1–10。保留率 = (final − R0)/(full final − R0)，R0 是 full 条件下第一条记录的平均回报（随机策略水平）。
+
+| 环境 | 方法 | full | r1（约 15%） | L10（约 10%） | r1L10（约 1.5%） |
+|---|---|---|---|---|---|
+| LunarLander | pair_step | 262 | 252（0.98） | 270（1.02） | 254（0.98） |
+| LunarLander | pcrit_res | 258 | 248（0.98） | 266（1.02） | 257（1.00） |
+| HalfCheetah | pair_step | 1481 | **1082（0.81）** | 1467（0.99） | **1115（0.83）** |
+| HalfCheetah | pcrit_res | 2196 | **1303（0.69）** | 1555（0.77） | **1170（0.64）** |
+
+括号内是保留率。加粗表示 Holm 校正后显著差于 full：
+- HalfCheetah pair_step：r1 p_holm=0.003，r1L10 p_holm=0.010；
+- HalfCheetah pcrit_res：r1 p_holm=0.037，r1L10 p_holm=0.016。
+
+HalfCheetah pcrit_res 的 L10 p=0.026，校正后 0.18，不显著。
+
+**次检验（pcrit_res vs pair_step，6 个）**：全部不显著。最接近的是 HalfCheetah r1：1303 vs 1082，p=0.086，p_holm=0.52。按判据，"pcrit_res 更省比较"**不成立**。
+
+**按事先判据：**
+- 预算稳健（保留率 ≥ 0.9 且不显著更差）：LunarLander 全部 6 个；HalfCheetah 只有 pair_step 的 L10。
+- 与预测的对照：
+  - LunarLander 的 r1 和 L10 ≥ 0.9——对；r1L10 会明显下降——错，几乎没降。
+  - HalfCheetah 的 L10 会伤到两种方法——错，pair_step 无损。
+  - r1 对 pcrit_res 影响更小——错，pcrit_res 的保留率更低。
+  - pcrit_res 更省比较——错。
+
+**解读：**
+- **时间上稀疏远好于配对上稀疏。** 预算相近（10% vs 15%）时，HalfCheetah 上 L10 保留 99%，r1 只保留 81%。
+  - r1 时，每条轨迹在每个 t 只有 1 个比较，优势就是一个 ±1，方差很大。
+  - L10 保留了每个检查点上的全部 28 对，平均之后很稳。而 reward-to-go 在 10 步内变化不大，窗口内共用一个优势损失很小。
+  - **实践上的建议：** 裁判预算有限时，应该少选几个时间点，每个时间点把组内全部比完，而不是每步都比但只比一两对。
+- **pcrit_res 在低预算下更脆弱。** 一个可能的原因是 critic 每次更新拿到的训练对少了 7–70 倍，而训练 epoch 固定为 4，critic 训练不足。这一点没有验证；如果要在低预算下用 pcrit_res，critic 的训练量应当随预算调整，并且需要单独实验。
+- **对论文的含义：** 局限 2（O(K²T) 比较成本）大幅缓解。在 LunarLander 上，1.5% 的比较就够了；在 HalfCheetah 上，10% 的比较（稀疏时间点 + 完整配对）就能让 pair_step 无损。
+
 ## 5. 建议的下一步
 
 0. （已完成，结果为否定）HalfCheetah 盆地检验：平局标签没有提高跳出率（4.7）。三值标签如果写进论文，理由只能是"标注更自然、能表达等价"，不能说它帮助探索。
@@ -404,6 +448,8 @@ python -m venv ../.venv && ../.venv/bin/pip install numpy torch "gymnasium[mujoc
 ../.venv/bin/python -I disc.py                # 按 disc_prereg.md 分析
 ./run_jobs.sh phase_b.py jobs_corr.txt 14     # 相关噪声，种子 1–10
 ../.venv/bin/python -I corr.py                # 按 corr_prereg.md 分析
+./run_jobs.sh phase_b.py jobs_budget.txt 14   # 比较预算，种子 1–10
+../.venv/bin/python -I budget.py              # 按 budget_prereg.md 分析
 ../.venv/bin/python -I basin.py               # 按 basin_prereg.md 的判据分析
 ../.venv/bin/python summarize.py results/phaseB ppo
 ```

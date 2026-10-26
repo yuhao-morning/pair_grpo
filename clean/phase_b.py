@@ -15,7 +15,7 @@
   pcrit_q    : 只用比较；BT 学 Q(s,a)，优势 = Q(s,a) − mean_m Q(s,a' ~ π)
   pcrit_resq : 只用比较；同 pcrit_q 的 Q，优势 = o_i − b_i（真实比较 − Q 推出的状态基线），消融用
   pcrit_dr   : 双重稳健；采到的动作用 o_i − m_i(a_i)，另采 M 个动作用模型优势 m_i(a') − b_i，权重 1/M
-pair_* 只用比较结果；比较可以加噪声（--noise 选相关噪声 tie/pos/tiepos，见 noisy_labels）：
+pair_* 只用比较结果；比较预算用 --pairs_per_t / --every 控制（见 sample_pairs）；比较可以加噪声（--noise 选相关噪声 tie/pos/tiepos，见 noisy_labels）：
   --flip eps   每个比较以概率 eps 翻转
   --tnoise sig 比较/打分前给回报加重尾噪声 sig * s * t(1.5)，标量方法看到同样的噪声回报
 所有非 ppo 方法最后只除以 batch std（不再中心化），保证步长可比，只有"形状"不同。
@@ -126,6 +126,36 @@ def noisy_labels(d, s, kind, rng, beta=0.44, tau_n=0.85):
     return c
 
 
+def sample_pairs(mask, r, L, rng):
+    """比较预算：只在 t = 0, L, 2L, ... 比较；r=0 表示这些 t 上比较所有活着的配对，
+    r≥1 表示每个 t 做 r 次随机完美匹配（每次约 K/2 对）。返回 (ci, cj, ct)，ci<cj。"""
+    K, T = mask.shape
+    ts = np.arange(0, T, L)
+    if r == 0:
+        ci, cj, k = np.nonzero(np.triu(np.ones((K, K), bool), 1)[:, :, None] & mask[:, None, ts] & mask[None, :, ts])
+        return ci, cj, ts[k]
+    CI, CJ, CT = [], [], []
+    for t in ts:
+        alive = np.flatnonzero(mask[:, t])
+        n = len(alive) // 2 * 2
+        for _ in range(r):
+            p = rng.permutation(alive)
+            x, y = p[0:n:2], p[1:n:2]
+            CI.append(np.minimum(x, y)); CJ.append(np.maximum(x, y)); CT.append(np.full(len(x), t))
+    return np.concatenate(CI), np.concatenate(CJ), np.concatenate(CT)
+
+
+def full_pair_count(mask):
+    """完整预算下的比较次数：每个 t 上活着的轨迹两两比较。"""
+    n = mask.sum(0)
+    return int((n * (n - 1) // 2).sum())
+
+
+def broadcast_window(A, L):
+    """每 L 步比较一次时，窗口 [kL, kL+L) 内的动作共用 t=kL 的优势。"""
+    return A if L == 1 else A[:, (np.arange(A.shape[1]) // L) * L]
+
+
 def sd_t(u, alive):
     """每个 t，活着的轨迹之间的 std。"""
     n = alive.sum(0)
@@ -159,6 +189,8 @@ def main():
     p.add_argument("--tnoise", type=float, default=0.0)
     p.add_argument("--tau", type=float, default=0.5)
     p.add_argument("--noise", default="iid", choices=["iid", "tie", "pos", "tiepos"])  # iid 用 --flip
+    p.add_argument("--pairs_per_t", type=int, default=0)   # 比较预算：0=全部配对；r=每个 t 做 r 次随机匹配
+    p.add_argument("--every", type=int, default=1)         # 比较预算：每 L 步比较一次
     p.add_argument("--beta", type=float, default=0.44)       # pos 噪声：选第一个的概率
     p.add_argument("--tau_n", type=float, default=0.85)      # tie/tiepos 噪声的尺度
     p.add_argument("--omega", type=float, default=1.0)       # gigpo 步级优势的权重
@@ -169,6 +201,8 @@ def main():
     p.add_argument("--tag", default="")
     p.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "results", "phaseB"))
     a = p.parse_args()
+    full_budget = a.pairs_per_t == 0 and a.every == 1
+    assert full_budget or a.algo in ("pair_step", "pcrit_res"), "比较预算只实现了 pair_step / pcrit_res"
 
     rng = np.random.default_rng(a.seed)
     random.seed(a.seed); np.random.seed(a.seed); torch.manual_seed(a.seed)
@@ -204,12 +238,16 @@ def main():
     if a.noise != "iid":
         nf = open(os.path.join(out_dir, f"noise_seed{a.seed}.txt"), "w")
         nf.write("step,flip_rate_nontie,tie_to_first,first_rate\n")
+    if not full_budget:
+        bf = open(os.path.join(out_dir, f"budget_seed{a.seed}.txt"), "w")
+        bf.write("step,pairs_used,pairs_full,fraction\n")
 
     step = 0
     while step < a.steps:
         O, A, LP, ADV, RET = [], [], [], [], []
         GROUPS = []   # pcrit_*：每组的比较标签和行号，批次收集完再算优势
         noise_log = []   # 相关噪声：(真实符号, 给出的标签)，用来记录实际翻转率
+        budget_log = []  # 比较预算：(实际比较次数, 完整预算下的次数)
         n_batch, ep_returns = 0, []
         while n_batch < a.batch:
             # ---- 一组：K 条轨迹，同一初始状态 ----
@@ -256,17 +294,24 @@ def main():
                 adv = np.repeat(pair_matrix(Utot[:, None], np.ones((a.K, 1), bool), a.flip, rng), T, 1)
             elif a.algo == "grpo_step":
                 adv = zscore_masked(U, mask)
-            elif a.algo == "pair_step" and a.noise == "iid":
+            elif a.algo == "pair_step" and a.noise == "iid" and full_budget:
                 adv = pair_matrix(U, mask, a.flip, rng)
             elif a.algo == "pair_step":
-                # 相关噪声：逐对生成标签（i<j，i 先呈现），再对活着的 j 取平均
-                ci, cj, ct = np.nonzero(np.triu(np.ones((a.K, a.K), bool), 1)[:, :, None] & mask[:, None, :] & mask[None, :, :])
-                c = noisy_labels(U[ci, ct] - U[cj, ct], sd_t(U, mask)[ct], a.noise, rng, a.beta, a.tau_n)
-                noise_log.append((np.sign(U[ci, ct] - U[cj, ct]), c))
+                # 相关噪声或有限比较预算：逐对生成标签（i<j，i 先呈现），再对比过的 j 取平均
+                ci, cj, ct = sample_pairs(mask, a.pairs_per_t, a.every, rng)
+                d = U[ci, ct] - U[cj, ct]
+                if a.noise == "iid":
+                    c = np.sign(d)
+                    if a.flip > 0:
+                        c = np.where(rng.random(len(c)) < a.flip, -c, c)
+                else:
+                    c = noisy_labels(d, sd_t(U, mask)[ct], a.noise, rng, a.beta, a.tau_n)
+                    noise_log.append((np.sign(d), c))
                 s_ = np.zeros((a.K, T)); n_ = np.zeros((a.K, T))
                 np.add.at(s_, (ci, ct), c); np.add.at(s_, (cj, ct), -c)
                 np.add.at(n_, (ci, ct), 1); np.add.at(n_, (cj, ct), 1)
-                adv = s_ / np.maximum(n_, 1)
+                adv = broadcast_window(s_ / np.maximum(n_, 1), a.every)
+                budget_log.append((len(c), full_pair_count(mask)))
             elif a.algo == "soft_step":
                 adv = pair_matrix(U, mask, a.flip, rng, soft_tau=a.tau, scale=ret_scale)
             elif a.algo in ("softz_step", "tie_step"):
@@ -304,7 +349,11 @@ def main():
                 ADV.append(adv[i, :lens[i]])
             if pcrit is not None:
                 # 只存比较结果 c ∈ {+1,0,−1}（由 oracle 给出），不存回报
-                ci, cj, ct = np.nonzero(np.triu(np.ones((a.K, a.K), bool), 1)[:, :, None] & mask[:, None, :] & mask[None, :, :])
+                if full_budget:
+                    ci, cj, ct = np.nonzero(np.triu(np.ones((a.K, a.K), bool), 1)[:, :, None] & mask[:, None, :] & mask[None, :, :])
+                else:
+                    ci, cj, ct = sample_pairs(mask, a.pairs_per_t, a.every, rng)
+                    budget_log.append((len(ci), full_pair_count(mask)))
                 if a.noise == "iid":
                     c = np.sign(U[ci, ct] - U[cj, ct])
                     if a.flip > 0:
@@ -321,6 +370,9 @@ def main():
         step += n_batch
         mean_ret = float(np.mean(ep_returns))
         w.writerow([step, mean_ret]); f.flush()
+        if budget_log:   # 实际用掉的比较次数占完整预算的比例
+            used, full = map(sum, zip(*budget_log))
+            bf.write(f"{step},{used},{full},{used / full:.4f}\n"); bf.flush()
         if noise_log:   # 实际翻转率（真实非平局中标签错的比例）、平局被判 +1 的比例、全部标签里选第一个的比例
             tr_, lb_ = map(np.concatenate, zip(*noise_log))
             nzt = tr_ != 0
@@ -391,7 +443,7 @@ def main():
                     if a.algo == "pcrit_res":
                         # 观测到的比较 − 仅凭状态预测的比较，对 j 取平均（反对称）
                         resid = c - sig2(f_all[ri] - f_all[rj])
-                        A_g = agg(resid, -resid)
+                        A_g = broadcast_window(agg(resid, -resid), a.every)
                     elif a.algo in ("pcrit_resq", "pcrit_dr"):
                         # o_i = mean_j c_ij；m_i(a) = mean_j [2σ(Q(s_i,a) − V(s_j)) − 1]；b_i = mean_m m_i(a'_m)
                         o_g = agg(c, -c)
