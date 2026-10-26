@@ -1,0 +1,297 @@
+\documentclass[11pt]{article}
+% Generic draft layout; switch to the venue style file before submission.
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage[numbers]{natbib}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\newtheorem{proposition}{Proposition}
+\newtheorem{lemma}{Lemma}
+\theoremstyle{remark}
+\newtheorem{remark}{Remark}
+\newcommand{\todo}[1]{\textcolor{red}{[TODO: #1]}}
+\newcommand{\sgn}{\operatorname{sign}}
+\newcommand{\E}{\mathbb{E}}
+
+\title{Ordinal Credit Assignment:\\Multi-Step Reinforcement Learning from Comparisons Alone}
+\author{Hao Yu \todo{affiliation}}
+\date{Draft, \today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\todo{Write last. Planned content: (1) setting --- an agent receives only ``which of two outcomes was better'' and never a scalar reward; (2) what the group-wise comparison advantage optimizes, and which label noise leaves its expected update intact; (3) a critic trained purely from comparisons that removes the state confound of per-step comparisons without changing the expected update; (4) pre-registered multi-seed results on six environments, including comparisons with reward-model-then-PPO and trajectory-level win-rate (SPO) baselines.}
+\end{abstract}
+
+%=====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Policy-gradient methods need a scalar reward, but for many tasks no formula captures every property we want, and a hand-written reward introduces bias that the policy will happily exploit. Judging which of two outcomes is better is often easier and more reliable than assigning either a score. The question we study is what reinforcement learning can do with that weaker signal alone: no reward function, no reward model, only comparisons.
+
+Using within-group win rates as the advantage in GRPO-style updates is not new; it has been proposed for text-to-image models~\citep{wang2025prefgrpo}, LLM agents~\citep{zhang2026arenarl,yang2026tournament}, rank-only advantages~\citep{choi2026gopo}, and, at the trajectory level, for continuous control~\citep{swamy2024minimaximalist}. The same estimator is the centered-rank fitness shaping of evolution strategies~\citep{wierstra2014nes,salimans2017es}. What has not been worked out is how to use comparisons for \emph{per-step} credit in multi-step tasks, what such updates actually optimize, and how they behave under the label noise real judges produce.
+
+\paragraph{Contributions.}
+\begin{enumerate}
+\item \textbf{What the ordinal update optimizes, and which noise hurts it} (Section~\ref{sec:theory}). The expected update ascends a win rate against the current policy; under deterministic rewards its only stable points are optimal, under stochastic rewards it can prefer a lower-mean action. Symmetric label noise that is concentrated near ties, and position bias, leave the expected update direction intact; only noise that also flips clear comparisons halves the signal. This predicts an experimental finding: at the same 25\% flip rate, independent flips collapse the method while near-tie and positional noise barely affect it.
+\item \textbf{A comparison-trained critic as a control variate} (Section~\ref{sec:method}). Comparing reward-to-go across trajectories at the same time step mixes the value of the state with the quality of the action. We train a state ranker from the same comparisons with a Bradley--Terry loss and subtract the comparison it predicts from the states alone. Because the correction depends only on states and on an independent trajectory, the expected update is unchanged. Two variants that let a learned model supply the advantage fail, which yields a design rule: the advantage must keep the observed comparison.
+\item \textbf{A pre-registered empirical study} (Section~\ref{sec:experiments}). Every main claim has its criteria written before the runs, 10--15 seeds, and multiple-comparison correction; we report the negative results. \todo{one-sentence summary of the headline findings once C1--C3 are in.}
+\end{enumerate}
+
+%=====================================================================
+\section{Related work}
+\label{sec:related}
+
+\paragraph{Win-rate and rank advantages.}
+Centered ranks were introduced as fitness shaping in natural evolution strategies~\citep{wierstra2014nes,salimans2017es}. In policy optimization for language and image models, within-group pairwise win rates or rank-only advantages replace scalar rewards in GRPO~\citep{shao2024grpo} variants~\citep{wang2025prefgrpo,choi2026gopo,zhang2026arenarl,yang2026tournament}. These operate on whole responses or whole trajectories. Self-play formulations~\citep{munos2023nash,wu2024sppo,swamy2024minimaximalist} make the win-rate objective explicit; \citet{dudik2015contextual} and \citet{zhang2025winrate} relate it to reward maximization. We use these results as lemmas and study the multi-step, per-step setting they leave open.
+
+\paragraph{Preference-based RL.}
+The classic route learns a reward model from trajectory or segment preferences and then runs RL~\citep{christiano2017deep,lee2021pebble}. Reward-model-free alternatives learn advantages or Q-functions directly from preferences offline~\citep{knox2024advantage,hejna2024cpl,hejna2023ipl}, or estimate policy-value differences online~\citep{zhang2025zpg,assmus2026sp3o}. We compare against the reward-model route with exactly the same comparisons, and against trajectory-level self-play~\citep{swamy2024minimaximalist}.
+
+\paragraph{Per-step credit without a critic.}
+Comparing reward-to-go across rollouts at the same time index goes back to PI$^2$~\citep{theodorou2010pi2}; anchor-state grouping~\citep{feng2025gigpo} and Monte Carlo rollouts from intermediate states~\citep{kazemnejad2025vineppo} assign per-step credit with scalar rewards. Our setting removes the scalar.
+
+\paragraph{Ties and judge noise.}
+Ties have been modeled in offline preference optimization~\citep{chen2025dpoties}. LLM judges show strong position bias~\citep{yagubyan2026coinflip}; our noise analysis covers that case.
+
+%=====================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{Setting}
+An agent interacts with an episodic MDP with policy $\pi_\theta$. Each update samples groups of $K$ trajectories $\tau^1,\dots,\tau^K$ that start from the same initial state and then evolve independently. For trajectory $i$ let $T_i$ be its length and $G^i_t=\sum_{k=t}^{T_i-1}\gamma^{k-t}r^i_k$ its reward-to-go, defined for $t<T_i$. The algorithm never observes $r$ or $G$. It observes only comparison labels
+\begin{equation}
+c^{ij}_t \in \{-1,0,+1\}, \qquad i,j\in A_t,
+\end{equation}
+where $A_t=\{i:\,t<T_i\}$ is the set of trajectories still running at time $t$, and $c^{ij}_t=+1$ means ``from time $t$ on, $i$ did better than $j$''. Noiseless labels are $c^{ij}_t=\sgn(G^i_t-G^j_t)$; Section~\ref{sec:noise} treats noisy ones. Labels are antisymmetric, $c^{ji}_t=-c^{ij}_t$.
+
+\subsection{Per-step comparison advantage}
+The per-step comparison advantage of the action $a^i_t$ is the mean comparison against the other running trajectories,
+\begin{equation}
+\label{eq:pair}
+\hat A^i_t = \frac{1}{|A_t|-1}\sum_{j\in A_t\setminus\{i\}} c^{ij}_t,
+\end{equation}
+set to zero when $|A_t|<2$. It is plugged into the clipped surrogate of PPO~\citep{schulman2017ppo}; advantages are divided by their batch standard deviation (not re-centered, since \eqref{eq:pair} already sums to zero within each $(\text{group},t)$).
+
+\subsection{Comparison-trained critic}
+Trajectories compared at the same $t$ sit in different states, so $c^{ij}_t$ reflects both how good $s^i_t$ is and how good the subsequent actions were. We learn a state ranker $V_\phi$ from the same labels with a Bradley--Terry loss,
+\begin{equation}
+\label{eq:bt}
+\begin{split}
+\mathcal{L}(\phi) = -\sum_{(i,j,t)} \Big[ & y^{ij}_t \log\sigma\big(V_\phi(s^i_t)-V_\phi(s^j_t)\big) \\
+ & + (1-y^{ij}_t)\log\sigma\big(V_\phi(s^j_t)-V_\phi(s^i_t)\big)\Big],\qquad y^{ij}_t=\tfrac{1+c^{ij}_t}{2},
+\end{split}
+\end{equation}
+so a tie has target $\tfrac12$. The advantage subtracts the comparison predicted from the two states alone:
+\begin{equation}
+\label{eq:res}
+\tilde A^i_t = \frac{1}{|A_t|-1}\sum_{j\in A_t\setminus\{i\}} \Big[ c^{ij}_t - \big(2\sigma(V_\phi(s^i_t)-V_\phi(s^j_t))-1\big) \Big].
+\end{equation}
+\textbf{Order of operations matters:} $\tilde A$ for the current batch is computed with the critic from earlier batches, and only afterwards is $V_\phi$ trained on the current batch's labels. This is what makes Proposition~\ref{prop:cv} hold.
+
+\begin{algorithm}[t]
+\caption{Per-step comparison policy optimization with a comparison-trained critic}
+\label{alg:main}
+\begin{algorithmic}[1]
+\For{each update}
+  \State Sample groups of $K$ trajectories, each group from a shared initial state
+  \State Query labels $c^{ij}_t$ at the chosen time points (all pairs per time point)
+  \State Compute $\tilde A^i_t$ by \eqref{eq:res} with the current $V_\phi$ \Comment{$\hat A$ by \eqref{eq:pair} without a critic}
+  \State Update $\pi_\theta$ with PPO-clip on $\tilde A / \operatorname{std}(\tilde A)$
+  \State Update $V_\phi$ on this batch's labels with \eqref{eq:bt}
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Comparison budget}
+All pairs at every step costs $O(K^2T)$ labels per group. Section~\ref{sec:exp-budget} shows that comparing all pairs at every $L$-th step, and letting the actions in each window share the advantage of the window start, keeps performance at $10\%$ of the labels, whereas comparing a single random pair at every step does not.
+
+%=====================================================================
+\section{What the comparison update optimizes}
+\label{sec:theory}
+
+\subsection{Rank structure and invariance}
+\begin{proposition}[Centered rank and monotone invariance]
+\label{prop:rank}
+With noiseless labels and all pairs compared, $\hat A^i_t = \frac{2\rho^i_t-(n-1)}{n-1}$, where $n=|A_t|$ and $\rho^i_t$ is the number of running trajectories with smaller reward-to-go at $t$, ties counted one half. Consequently $\hat A$ is unchanged if, at every $t$, the compared quantity $G_t$ is replaced by $f_t(G_t)$ for any strictly increasing $f_t$.
+\end{proposition}
+\begin{proof}
+$\sum_{j\ne i}\sgn(G^i_t-G^j_t) = \#\{j:G^j_t<G^i_t\} - \#\{j:G^j_t>G^i_t\} = \rho^i_t-\big((n-1)-\rho^i_t\big)$, with ties contributing $0 = \tfrac12-\tfrac12$. Strictly increasing maps preserve every sign.
+\end{proof}
+\begin{remark}
+The invariance concerns the compared outcome, not the per-step reward: a monotone transform of $r$ need not preserve the order of sums. For single-step problems the two coincide. Standard GRPO, which z-scores within the group, is invariant only to group-wise affine maps.
+\end{remark}
+
+\subsection{Single-step case: win rate against the current policy}
+Let the action space be finite, $\pi$ a policy, and define the win rate of action $a$ against $\pi$ under labels $c(a,b)$,
+\begin{equation}
+W_\pi(a) = \E_{b\sim\pi}\big[c(a,b)\big].
+\end{equation}
+For noiseless labels with a random reward $R$, $W_\pi(a)=\Pr(R(a)>R(b))-\Pr(R(a)<R(b))$.
+
+\begin{lemma}[Unbiasedness]
+\label{lem:unbiased}
+With $K$ i.i.d.\ samples from $\pi_\theta$, $\E\big[\hat A^i\,\big|\,a^i\big]=W_{\pi_\theta}(a^i)$. Hence the expected update $\E[\nabla_\theta\log\pi_\theta(a^i)\hat A^i]$ equals $\nabla_{\theta'}\E_{a\sim\pi_{\theta'}}[W_{\pi_\theta}(a)]\big|_{\theta'=\theta}$, the gradient of the win rate against a frozen copy of the current policy.
+\end{lemma}
+\begin{proof}
+Given $a^i$, the other $K-1$ samples are independent draws from $\pi_\theta$, so each $c(a^i,a^j)$ has conditional mean $W_{\pi_\theta}(a^i)$. The second statement is the score-function identity with $W_{\pi_\theta}$ held fixed.
+\end{proof}
+
+\begin{proposition}[Deterministic rewards: only optimal policies are stable]
+\label{prop:det}
+Let $R$ be deterministic, $\pi$ a softmax over logits $z$, and consider the expected-update (gradient-flow) dynamics $\dot z=\E[\nabla_z\log\pi(a)\hat A(a)]$. Then
+\begin{enumerate}
+\item[(i)] $\dot z_a=\pi(a)\,W_\pi(a)$, and $\E_{a\sim\pi}W_\pi(a)=0$;
+\item[(ii)] $\dot z=0$ if and only if all actions in the support of $\pi$ have the same reward;
+\item[(iii)] a drift-free policy whose support has reward below the maximum is unstable: if an $\varepsilon$ of probability is moved to a strictly better action $a^+$, then $\frac{d}{d\tau}\pi(a^+)>0$; a drift-free policy supported on maximizers is stable: if an $\varepsilon$ of probability is moved to worse actions, their logits decrease.
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+(i) For softmax, $\partial_{z_a}\log\pi(b)=\mathbb{1}[a=b]-\pi(a)$, so $\dot z_a=\pi(a)W_\pi(a)-\pi(a)\E_\pi W_\pi$, and $\E_{a,b\sim\pi}c(a,b)=0$ by antisymmetry.
+(ii) If the support has two reward levels, an action $\bar a$ at the highest supported level has $W_\pi(\bar a)=\Pr_{b\sim\pi}(R(b)<R(\bar a))>0$, so $\dot z_{\bar a}>0$. Conversely, a single supported level gives $W_\pi\equiv 0$ on the support.
+(iii) Let $\pi$ be supported on a level set $L$ and move $\varepsilon$ to $a^+$ with $R(a^+)>R(b)$ for $b\in L$. Then $W(a^+)=1-\varepsilon$ and $W(b)=-\varepsilon$ for $b\in L$, so $\dot z_{a^+}=\varepsilon(1-\varepsilon)$, $\dot z_b=-\pi(b)\varepsilon$, and
+$\frac{d}{d\tau}\pi(a^+)=\pi(a^+)\big(\dot z_{a^+}-\sum_b\pi(b)\dot z_b\big)=\varepsilon^2\big((1-\varepsilon)^2+\textstyle\sum_{b\in L}\pi(b)^2\big)>0$.
+The stable case is symmetric: actions worse than all of the support have $W=-(1-\varepsilon)<0$.
+\end{proof}
+\begin{remark}
+The probability of the set of maximizers is \emph{not} monotone along the dynamics: when a second-best action holds most of the mass and beats the remaining ones, its logit can grow faster than that of the best action. A random search over 200{,}000 reward/policy pairs found this in 3.2\% of cases (e.g.\ rewards $(3,3,1,0,0,0)$, $\pi=(0.016,0.04,0.68,0.078,0.103,0.082)$). The proposition therefore states stability, not monotone improvement.
+\end{remark}
+
+\begin{proposition}[Stochastic rewards: the win-rate optimum can have lower mean]
+\label{prop:skew}
+Let $R(a_1)=0$ and $R(a_2)=1$ with probability $0.9$, $-20$ otherwise ($\E R(a_2)=-1.1$). Then $W(a_2)$ against $a_1$ is $0.8>0$, so the comparison update moves toward $a_2$, whereas expected-reward maximization chooses $a_1$.
+\end{proposition}
+\begin{remark}
+Group-normalized GRPO has the same failure in our bandit runs (20/20 seeds pick the lower-mean arm); only the unnormalized linear advantage picks $a_1$. The bias of group standard-deviation normalization was noted by \citet{liu2025drgrpo}.
+\end{remark}
+
+\subsection{Label noise}
+\label{sec:noise}
+Write $\Delta=G^i_t-G^j_t$ and consider labels that are flipped with a probability depending only on $|\Delta|$, $\tilde c=\sgn(\Delta)\cdot\xi$ with $\Pr(\xi=-1\mid\Delta)=q(|\Delta|)<\tfrac12$, ties kept as ties.
+
+\begin{proposition}[Which noise preserves the expected update]
+\label{prop:noise}
+$\E[\tilde c\mid\Delta]=g(\Delta):=\sgn(\Delta)\big(1-2q(|\Delta|)\big)$.
+\begin{enumerate}
+\item[(a)] If $q\equiv\varepsilon$ (independent flips), $g=(1-2\varepsilon)\sgn$: the expected update is scaled by $1-2\varepsilon$ while the per-label variance is not reduced.
+\item[(b)] If $q$ is non-increasing in $|\Delta|$ (errors concentrated near ties), $g$ is odd and non-decreasing. Lemma~\ref{lem:unbiased} and Proposition~\ref{prop:det} hold with $c$ replaced by $g$, and comparisons with large $|\Delta|$ keep almost full weight.
+\item[(c)] Position bias --- with probability $\beta$ the label is $+1$ for whichever item was presented first, independently of the outcomes --- adds to $\hat A^i$ a term that depends only on the presentation order. If the order does not depend on the actions, this term has zero correlation with $\nabla\log\pi(a^i_t)$, so the expected update is unchanged and only its variance grows.
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+(a),(b): direct computation; for (b), $1-2q(|\Delta|)\ge 0$ and non-decreasing in $|\Delta|$, so $g$ is non-decreasing on each half-line, and the proofs of Lemma~\ref{lem:unbiased} and Proposition~\ref{prop:det} use only antisymmetry of the label and its sign for $\Delta\neq 0$, both of which $g$ preserves when $q<\tfrac12$. (c): the added term is a function of the presentation order, which is independent of $a^i_t$ given $s^i_t$, so the score function has zero mean against it.
+\end{proof}
+
+\subsection{The comparison-trained critic does not change the expected update}
+\begin{proposition}[Control variate]
+\label{prop:cv}
+Suppose $V_\phi$ does not depend on the current batch. Then for every $(i,t)$,
+\[
+\E\big[\nabla_\theta\log\pi_\theta(a^i_t\mid s^i_t)\,\tilde A^i_t\big]=\E\big[\nabla_\theta\log\pi_\theta(a^i_t\mid s^i_t)\,\hat A^i_t\big].
+\]
+\end{proposition}
+\begin{proof}
+The difference is $\E[\nabla\log\pi(a^i_t\mid s^i_t)\,B]$ with $B=\frac{1}{|A_t|-1}\sum_{j}\big(2\sigma(V_\phi(s^i_t)-V_\phi(s^j_t))-1\big)$. $B$ depends on $s^i_t$, on the states $s^j_t$ of other trajectories, and on which of them are still running at $t$. Trajectories $j\ne i$ are generated independently of trajectory $i$ after the shared initial state, and whether $i$ is running at $t$ is decided before $a^i_t$. Hence, conditionally on $s^i_t$ and on all other trajectories, $a^i_t\sim\pi_\theta(\cdot\mid s^i_t)$ and $\E[\nabla\log\pi(a^i_t\mid s^i_t)\mid s^i_t,\{\tau^j\}_{j\ne i}]=0$.
+\end{proof}
+\begin{remark}
+The variance reduction is that of a control variate: it is largest when $2\sigma(V(s^i)-V(s^j))-1$ approximates $\E[c^{ij}_t\mid s^i_t,s^j_t]$. If $V_\phi$ were trained on the current batch first, $B$ would depend on $a^i_t$ through the labels and the identity would fail.
+\end{remark}
+
+\subsection{Open: the multi-step objective}
+\todo{Characterize what the per-step update ascends. By the argument of Lemma~\ref{lem:unbiased}, at each $t$ it is the gradient of the win probability of the action's reward-to-go against the reward-to-go of an independent running trajectory at the same $t$, with the opponent population frozen. Open: fixed points and their relation to expected return; conditions (e.g.\ deterministic dynamics) under which the optimum is preserved; a multi-step version of Proposition~\ref{prop:skew}.}
+
+%=====================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\paragraph{Protocol.}
+Six environments (CartPole, Acrobot, LunarLander, Hopper, HalfCheetah, MiniGrid DoorKey-5$\times$5). All methods share the actor, PPO-clip settings and data collection: $K=8$ trajectories per group from a shared initial state, 8192 steps per update. Labels are generated from the environment return; the algorithms see only labels. Every main claim was pre-registered with its test, correction, and decision rule before the runs; tuning seeds are disjoint from evaluation seeds. We report mean $\pm$ 95\% confidence interval over 10 seeds unless stated, Welch $t$-tests with Holm correction within each family, and Mann--Whitney tests as a check. \todo{link to code and pre-registration files.}
+
+\subsection{Cost of using comparisons only}
+\label{sec:exp-equal}
+\todo{C1 (pair vs.\ GRPO at the same granularity, 10 seeds, TOST) and C2 (non-inferiority to PPO after long training) --- running.}
+
+\subsection{Per-step credit from a comparison-trained critic}
+\label{sec:exp-critic}
+\begin{table}[h]
+\centering
+\caption{Final return, 3M steps, 10 seeds. PPO and GiGPO use scalar rewards; the remaining four columns use comparisons only. Pre-registered: the critic variant beats the critic-free one on HalfCheetah ($p=0.013$; Hopper not significant); the model-only and doubly robust variants do not beat it.}
+\label{tab:critic}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{scalar reward} & \multicolumn{4}{c}{comparisons only} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-7}
+ & PPO & GiGPO & per-step & +critic (ours) & model-only $Q$ & doubly robust \\
+\midrule
+HalfCheetah & $4495\pm1031$ & $337\pm139$ & $1483\pm163$ & $2203\pm525$ & $801\pm196$ & $1766\pm359$ \\
+Hopper      & $1765\pm304$ & $1720\pm388$ & $1884\pm417$ & $2110\pm175$ & $511\pm219$ & $2189\pm427$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+\todo{Text: model-only advantage rises fastest then collapses (policy exploits critic error); GiGPO reduces to trajectory-level grouping in continuous state; remaining 2$\times$ gap to PPO on HalfCheetah.}
+
+\subsection{Comparison with learning a reward model, and with trajectory-level win rate}
+\label{sec:exp-rm}
+\begin{table}[h]
+\centering
+\caption{Final return, 10 seeds. ``Reward model + PPO'' learns $\hat r(s,a)$ from exactly the same comparisons. Pre-registered verdict: comparable; the reward-model route is significantly worse on LunarLander (Holm), where it explains only about 70\% of the comparisons.}
+\label{tab:rm}
+\begin{tabular}{lccccc}
+\toprule
+ & per-step & + critic (ours) & reward model + PPO & SPO & RM accuracy \\
+\midrule
+HalfCheetah 3M & $1481$ & $2196$ & $2371$ & $1310$ & 0.99 \\
+Hopper 3M      & $1881$ & $2114$ & $1827$ & $2564$ & 1.00 \\
+LunarLander 2M & $262$  & $258$  & $205$  & $102$  & 0.70 \\
+Acrobot 0.5M   & $-128$ & $-86$  & $-208$ & $-127$ & 0.80 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Goal-oriented sparse reward}
+On MiniGrid DoorKey-5$\times$5 (reward only on reaching the goal, variable episode length), the per-step and critic variants reach 100\% success on all seeds; area under the learning curve is not measurably different from PPO, GRPO, or the reward-model route, while SPO is 22\% slower ($p_{\text{Holm}}=0.0025$). Larger maps were excluded by a pre-registered rule because PPO itself fails on some seeds there. \todo{table.}
+
+\subsection{Label noise}
+\label{sec:exp-noise}
+\begin{table}[h]
+\centering
+\caption{LunarLander final return under label noise with a matched flip rate of about 25\%. Independent flips collapse the critic-free method; near-tie and positional noise, which leave the expected update intact (Proposition~\ref{prop:noise}), barely affect it.}
+\label{tab:noise}
+\begin{tabular}{lccccc}
+\toprule
+ & clean & independent & near-tie & position (72\%) & unsure$\to$first \\
+\midrule
+per-step       & $262$ & $\mathbf{71}$ & $258$ & $250$ & $249$ \\
++ critic (ours) & $258$ & $259$ & $261$ & $263$ & $263$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Comparison budget}
+\label{sec:exp-budget}
+\todo{Table: retention under r1 / L10 / r1L10; sparse-in-time, full-in-pairs keeps 99\% on HalfCheetah at 10\% of labels, LunarLander 98--100\% down to 1.5\%.}
+
+\subsection{Sensitivity to hyperparameters}
+\todo{C3 --- running.}
+
+%=====================================================================
+\section{Limitations}
+\begin{itemize}
+\item All labels are generated from environment returns. The experiments show that the algorithms do not need reward magnitudes; they do not show learning on a task where no reward can be written down. An experiment with an LLM judge is designed but not run.
+\item Groups require $K$ rollouts from a shared initial state, i.e.\ a resettable simulator.
+\item Under stochastic rewards the objective is a win rate, not expected return (Proposition~\ref{prop:skew}).
+\item On HalfCheetah every comparison-only method remains about $2\times$ below PPO with scalar rewards.
+\item Small networks and classic control tasks; harder goal-oriented tasks are limited by exploration, where comparisons among all-failing groups carry no signal.
+\end{itemize}
+
+\bibliographystyle{plainnat}
+\bibliography{refs}
+
+\end{document}
