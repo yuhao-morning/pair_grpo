@@ -47,7 +47,7 @@ def rollout_group(actor, norm, seed, rng):
             if term or trunc:
                 u = env.unwrapped
                 if trunc:
-                    end = "still flying when the time limit was reached"
+                    end = "the time limit was reached"   # v2：中性措辞，状态交给快照（v1 写成 "still flying"，与快照矛盾）
                 elif getattr(u, "game_over", False) or abs(o[0]) >= 1.0:
                     end = "crashed or flew out of bounds"
                 else:

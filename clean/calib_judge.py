@@ -17,10 +17,22 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
+# 默认值对应 v1（results/calib）；v2 通过命令行指定模型和目录
 MODEL = "gemini-3.5-flash-lite"
-PRICE_IN, PRICE_OUT = 0.30, 2.50   # 美元 / 百万 token（付费标准价，用来设上限）
-URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
-ITEMS, CACHE = "results/calib/items.jsonl", "results/calib/cache.jsonl"
+PRICES = {"gemini-3.5-flash-lite": (0.30, 2.50),   # 美元 / 百万 token，付费标准价（含思考 token），用来设上限
+          "gemini-3.5-flash": (1.50, 7.50)}        # 定价页未列出 3.5 Flash，按 3.6 Flash 的价格保守计
+OUTDIR = "results/calib"
+
+
+def configure(model, outdir):
+    global MODEL, PRICE_IN, PRICE_OUT, URL, ITEMS, CACHE, OUTDIR
+    MODEL, OUTDIR = model, outdir
+    PRICE_IN, PRICE_OUT = PRICES[model]
+    URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+    ITEMS, CACHE = f"{outdir}/items.jsonl", f"{outdir}/cache_{model}.jsonl" if outdir != "results/calib" else f"{outdir}/cache.jsonl"
+
+
+configure(MODEL, OUTDIR)
 
 SPEC = ("You are judging the behaviour of a lunar lander in a simulator.\n"
         "Goal: land gently and upright on the landing pad, which is on flat ground between two flags at "
@@ -129,7 +141,10 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--cap", type=float, default=10.0)
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--model", default="gemini-3.5-flash-lite", choices=sorted(PRICES))
+    ap.add_argument("--outdir", default="results/calib")
     a = ap.parse_args()
+    configure(a.model, a.outdir)
     items = [json.loads(l) for l in open(ITEMS)]
     jobs = build_jobs(items, random.Random(0))   # 先用全部检查点构造，保证 --limit 前后抽到的配对一致
     if a.limit:
@@ -156,7 +171,10 @@ def main():
                     break
             if (k + 1) % 200 == 0:
                 print(f"  {k + 1}/{len(jobs)}  新调用 {judge.calls}  累计 ${judge.spent:.3f}  {time.time() - t0:.0f}s", flush=True)
-    with open("results/calib/judgments.json", "w") as f:
+    jpath = f"{OUTDIR}/judgments.json" if OUTDIR == "results/calib" else f"{OUTDIR}/judgments_{MODEL}.json"
+    if a.limit:   # 试跑写到单独的文件，避免覆盖全量结果
+        jpath = jpath.replace(".json", f".limit{a.limit}.json")
+    with open(jpath, "w") as f:
         json.dump([[t, list(k) if not isinstance(k, tuple) else [x if not isinstance(x, tuple) else list(x) for x in k], v]
                    for (t, k), v in results.items()], f)
     print(f"完成：新调用 {judge.calls}，累计花费 ${judge.spent:.3f}，错误 {len(errors)}，无法解析 {sum(v is None for v in results.values())}")

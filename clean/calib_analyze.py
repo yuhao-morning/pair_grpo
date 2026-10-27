@@ -9,7 +9,7 @@ import sys
 ITEMS = sys.argv[1] if len(sys.argv) > 1 else "results/calib/items.jsonl"
 GOLD = sys.argv[2] if len(sys.argv) > 2 else "G"   # "G"：预注册的折扣回报；"G1"：不折扣（探索性）
 items = {it["item"]: it for it in (json.loads(l) for l in open(ITEMS))}
-J = json.load(open("results/calib/judgments.json"))
+J = json.load(open(sys.argv[3] if len(sys.argv) > 3 else "results/calib/judgments.json"))
 LET = "ABCDEFGH"
 
 
@@ -72,7 +72,7 @@ def collect(pairs, fn):
         js = fn(it, a, b)
         if not js:
             continue
-        rows.append((it, z, np.mean([eff(j, g) for j in js]), np.mean([j == 0 for j in js])))
+        rows.append((it, z, np.mean([eff(j, g) for j in js]), np.mean([j == 0 for j in js]), a, b))
     return np.array(rows)
 
 
