@@ -1,0 +1,40 @@
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 1 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 1 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 1 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 1 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 2 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 2 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 2 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 2 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 3 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 3 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 3 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 3 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 4 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 4 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 4 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 4 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 5 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 5 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 5 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 5 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 6 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 6 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 6 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 6 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 7 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 7 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 7 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 7 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 8 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 8 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 8 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 8 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 9 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 9 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 9 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 9 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --train_reward hand --tag hand --seed 10 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo ppo --seed 10 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --seed 10 --steps 1000000 --out results/lunarleft_oracle
+--env LunarLeft-v0 --algo pair_step --every 20 --tag L20 --seed 10 --steps 1000000 --out results/lunarleft_oracle

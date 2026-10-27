@@ -162,6 +162,12 @@ def rm_group_returns(rm, x, lens, gamma):
 
 def make_env(name):
     """MiniGrid：只用 7×7×3 的局部视野图像并展平；其他环境直接 gym.make。"""
+    if name in ("LunarLeft-v0", "LunarLeftPath-v0"):
+        import lunar_left  # noqa: F401  注册环境
+        return gym.make(name)
+    if name == "Courier-v0":
+        import courier_env  # noqa: F401  注册环境
+        return gym.make(name)
     if name.startswith("MiniGrid"):
         import minigrid  # noqa: F401  注册环境
         from minigrid.wrappers import ImgObsWrapper
@@ -225,6 +231,8 @@ def main():
     p.add_argument("--rm_buffer", type=int, default=5)       # rm_ppo：保留最近几次更新的比较
     p.add_argument("--rm_epochs", type=int, default=2)       # rm_ppo：每次更新在缓冲区上训练几轮
     p.add_argument("--spo_queue", type=int, default=64)      # spo：比较队列长度 B（论文 10–100）
+    p.add_argument("--shaping", type=float, default=0.0)   # 势函数整形系数（只加在标量训练奖励上；Courier 用）
+    p.add_argument("--train_reward", default="env", choices=["env", "naive", "common", "hand"])  # 训练用哪种奖励；日志始终记环境回报
     p.add_argument("--save_at", type=int, nargs="*", default=[])  # 在这些步数保存策略（采这一批数据时的参数）
     p.add_argument("--tag", default="")
     p.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "results", "phaseB"))
@@ -266,6 +274,12 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
     f = open(os.path.join(out_dir, f"seed{a.seed}.csv"), "w", newline="")
     w = csv.writer(f); w.writerow(["step", "reward"])
+    if a.env in ("LunarLeft-v0", "LunarLeftPath-v0"):
+        evf = open(os.path.join(out_dir, f"events_seed{a.seed}.txt"), "w")
+        evf.write("step,landed,crashed,end_left,end_right\n")
+    if a.env == "Courier-v0":
+        evf = open(os.path.join(out_dir, f"events_seed{a.seed}.txt"), "w")
+        evf.write("step,flowers_per_ep,success_rate,lava_rate\n")
     if a.env.startswith("MiniGrid"):   # 目标导向任务：另记成功率（回报 > 0 即到达目标）
         sf = open(os.path.join(out_dir, f"success_seed{a.seed}.txt"), "w")
         sf.write("step,success_rate\n")
@@ -283,6 +297,7 @@ def main():
     while step < a.steps:
         O, A, LP, ADV, RET = [], [], [], [], []
         GROUPS = []   # pcrit_*：每组的比较标签和行号，批次收集完再算优势
+        ep_events = []   # Courier：每回合 (踩花坛次数, 是否送达, 是否踩岩浆)
         noise_log = []   # 相关噪声：(真实符号, 给出的标签)，用来记录实际翻转率
         budget_log = []  # 比较预算：(实际比较次数, 完整预算下的次数)
         n_batch, ep_returns = 0, []
@@ -291,7 +306,7 @@ def main():
             gseed = int(rng.integers(2 ** 31))
             obs = np.stack([e.reset(seed=gseed)[0] for e in envs])
             alive = np.ones(a.K, bool)
-            traj = [dict(o=[], a=[], lp=[], r=[], last=None, trunc=False) for _ in range(a.K)]
+            traj = [dict(o=[], a=[], lp=[], r=[], gold=[], ev=[], last=None, trunc=False) for _ in range(a.K)]
             while alive.any():
                 idx = np.flatnonzero(alive)
                 on = onorm(obs[idx])
@@ -302,9 +317,14 @@ def main():
                     lp = lp.sum(-1) if continuous else lp
                 act_np = act.numpy()
                 for k, i in enumerate(idx):
-                    nobs, r, term, trunc, _ = envs[i].step(act_np[k])
+                    nobs, r, term, trunc, info = envs[i].step(act_np[k])
+                    g_r, r = r, (r if a.train_reward == "env" else info["r_" + a.train_reward])   # gold 只用于记录
+                    if a.shaping:
+                        r = r + a.shaping * info["shaping"]
                     tr = traj[i]
-                    tr["o"].append(obs[i].copy()); tr["a"].append(act_np[k]); tr["lp"].append(lp[k].item()); tr["r"].append(r)
+                    tr["o"].append(obs[i].copy()); tr["a"].append(act_np[k]); tr["lp"].append(lp[k].item()); tr["r"].append(r); tr["gold"].append(g_r)
+                    if a.env in ("Courier-v0", "LunarLeft-v0", "LunarLeftPath-v0"):
+                        tr["ev"].append(info)
                     obs[i] = nobs
                     if term or trunc:
                         alive[i] = False
@@ -317,7 +337,13 @@ def main():
             for i, t in enumerate(traj):
                 G[i, :lens[i]] = discounted_to_go(np.array(t["r"]), a.gamma)
             totals = np.array([sum(t["r"]) for t in traj])
-            ep_returns += totals.tolist()
+            ep_returns += [sum(t["gold"]) for t in traj]   # 记录的始终是环境回报（Courier 下即金标准）
+            if a.env in ("LunarLeft-v0", "LunarLeftPath-v0"):
+                ep_events += [(t["ev"][-1]["landed"], t["ev"][-1]["crashed"],
+                               (not t["ev"][-1]["crashed"]) and t["ev"][-1]["x_end"] < 0,
+                               (not t["ev"][-1]["crashed"]) and t["ev"][-1]["x_end"] > 0) for t in traj]
+            if a.env == "Courier-v0":
+                ep_events += [(sum(e["flower"] for e in t["ev"]), any(e["deliver"] for e in t["ev"]), any(e["lava"] for e in t["ev"])) for t in traj]
             if ret_scale is None:   # Acrobot 初期全是 -500，std=0，退回到 |mean| 的 10%
                 ret_scale = max(float(np.std(totals)), 0.1 * abs(float(np.mean(totals))), 1.0)
             U, Utot = G, totals.copy()
@@ -411,6 +437,12 @@ def main():
         step += n_batch
         mean_ret = float(np.mean(ep_returns))
         w.writerow([step, mean_ret]); f.flush()
+        if a.env in ("LunarLeft-v0", "LunarLeftPath-v0"):
+            ev_ = np.array(ep_events, float)
+            evf.write(",".join([str(step)] + [f"{v:.3f}" for v in ev_.mean(0)]) + "\n"); evf.flush()
+        if a.env == "Courier-v0":
+            ev_ = np.array(ep_events, float)
+            evf.write(f"{step},{ev_[:, 0].mean():.3f},{ev_[:, 1].mean():.3f},{ev_[:, 2].mean():.3f}\n"); evf.flush()
         if a.env.startswith("MiniGrid"):
             sf.write(f"{step},{np.mean(np.array(ep_returns) > 0):.4f}\n"); sf.flush()
         if budget_log:   # 实际用掉的比较次数占完整预算的比例
