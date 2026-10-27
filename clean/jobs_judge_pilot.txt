@@ -1,0 +1,5 @@
+--env LunarLeft-v0 --algo pair_step --every 20 --judge gemini-3.5-flash-lite --judge_cap 6 --tag judge --seed 1 --steps 1000000 --out results/judge
+--env LunarLeft-v0 --algo pair_step --every 20 --judge gemini-3.5-flash-lite --judge_cap 6 --tag judge --seed 2 --steps 1000000 --out results/judge
+--env LunarLeft-v0 --algo pair_step --every 20 --judge gemini-3.5-flash-lite --judge_cap 6 --tag judge --seed 3 --steps 1000000 --out results/judge
+--env LunarLeft-v0 --algo pair_step --every 20 --judge gemini-3.5-flash-lite --judge_cap 6 --tag judge --seed 4 --steps 1000000 --out results/judge
+--env LunarLeft-v0 --algo pair_step --every 20 --judge gemini-3.5-flash-lite --judge_cap 6 --tag judge --seed 5 --steps 1000000 --out results/judge

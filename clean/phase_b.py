@@ -193,6 +193,61 @@ def sd_t(u, alive):
     return np.sqrt((((u - mu) ** 2) * alive).sum(0) / np.maximum(n - 1, 1))
 
 
+def judge_fill(a, JG, ADV, judge, rng, jf, step):
+    """对批次里每组、每个检查点 t（每 a.every 步一个）问一次裁判（组内排名），把两两标签变成优势写回 ADV。
+    还记录裁判标签与金标准比较（sign ΔG_t）的一致率，只用于监控。"""
+    from concurrent.futures import ThreadPoolExecutor
+    import judge_left as jl
+    reqs = []
+    for gi, g in enumerate(JG):
+        for t in range(0, g["T"], a.every):
+            alive = [i for i in range(a.K) if g["lens"][i] > t]
+            if len(alive) < 2:
+                continue
+            sums = []
+            for i in alive:
+                tr = g["traj"][i]
+                info = tr["ev"][-1]
+                end = "crashed" if info.get("crashed") else ("landed" if info.get("landed") else "timeout")
+                obs = np.array(tr["o"] + [tr["last"]])
+                sums.append(jl.summary_short(obs, np.array(tr["a"]), end, t))
+            order = list(rng.permutation(len(alive)))
+            reqs.append((gi, t, alive, order, *jl.rank_prompt([sums[k] for k in order])))
+
+    def ask(r):
+        try:
+            return judge(r[4], r[5])
+        except RuntimeError:
+            return None
+
+    with ThreadPoolExecutor(16) as ex:
+        outs = list(ex.map(ask, reqs))
+    acc = {gi: (np.zeros((a.K, g["T"])), np.zeros((a.K, g["T"]))) for gi, g in enumerate(JG)}
+    invalid, agree = 0, []
+    for (gi, t, alive, order, _, _), out in zip(reqs, outs):
+        rank = jl.tiers_to_rank(out, len(alive))
+        if rank is None:
+            invalid += 1
+            continue
+        r_of = {alive[order[k]]: rank[k] for k in range(len(alive))}
+        s_, n_ = acc[gi]
+        U = JG[gi]["U"]
+        for x in range(len(alive)):
+            for y in range(x + 1, len(alive)):
+                i, j = alive[x], alive[y]
+                c = float(np.sign(r_of[j] - r_of[i]))     # 名次小为好：i 更好时 c=+1
+                s_[i, t] += c; s_[j, t] -= c; n_[i, t] += 1; n_[j, t] += 1
+                g_ = np.sign(U[i, t] - U[j, t])
+                if g_ != 0:
+                    agree.append(0.5 if c == 0 else float(c == g_))
+    for gi, g in enumerate(JG):
+        s_, n_ = acc[gi]
+        adv = broadcast_window(s_ / np.maximum(n_, 1), a.every)
+        for i in range(a.K):
+            ADV[g["start"] + i] = adv[i, :g["lens"][i]]
+    jf.write(f"{step},{judge.calls},{judge.spent:.4f},{invalid},{np.mean(agree) if agree else float('nan'):.4f}\n"); jf.flush()
+
+
 def zscore_masked(u, alive):
     """每个 t，对活着的轨迹做 z-score；少于 2 条活着则为 0。"""
     n = alive.sum(0)
@@ -231,6 +286,8 @@ def main():
     p.add_argument("--rm_buffer", type=int, default=5)       # rm_ppo：保留最近几次更新的比较
     p.add_argument("--rm_epochs", type=int, default=2)       # rm_ppo：每次更新在缓冲区上训练几轮
     p.add_argument("--spo_queue", type=int, default=64)      # spo：比较队列长度 B（论文 10–100）
+    p.add_argument("--judge", default="")                   # 非空：pair_step 的标签由该 LLM 裁判给出（LunarLeft-v0）
+    p.add_argument("--judge_cap", type=float, default=6.0)  # 每个运行的裁判花费上限（美元，按付费价）
     p.add_argument("--shaping", type=float, default=0.0)   # 势函数整形系数（只加在标量训练奖励上；Courier 用）
     p.add_argument("--train_reward", default="env", choices=["env", "naive", "common", "hand"])  # 训练用哪种奖励；日志始终记环境回报
     p.add_argument("--save_at", type=int, nargs="*", default=[])  # 在这些步数保存策略（采这一批数据时的参数）
@@ -263,6 +320,14 @@ def main():
         rm = Critic(obs_dim + act_dim)
         rm_opt = optim.Adam(rm.parameters(), lr=a.crit_lr)
         rm_buf = []
+    judge = jf = None
+    if a.judge:
+        assert a.algo == "pair_step" and a.env == "LunarLeft-v0", "裁判只接在 LunarLeft 的 pair_step 上"
+        import calib_judge as cj
+        cj.configure(a.judge, os.path.join(a.out, a.env, a.algo + (a.tag and "_" + a.tag)))
+        cj.CACHE = os.path.join(os.path.dirname(cj.CACHE), f"cache_seed{a.seed}.jsonl")   # 每个运行单独的缓存与花费
+        os.makedirs(os.path.dirname(cj.CACHE), exist_ok=True)
+        judge = cj.Judge(a.judge_cap)
     spo_q = []   # spo：最近 B 条轨迹的（可能带噪的）总回报
     a_opt = optim.Adam(actor.parameters(), lr=a.lr)
     c_opt = optim.Adam(critic.parameters(), lr=a.lr)
@@ -289,6 +354,9 @@ def main():
     if a.noise != "iid":
         nf = open(os.path.join(out_dir, f"noise_seed{a.seed}.txt"), "w")
         nf.write("step,flip_rate_nontie,tie_to_first,first_rate\n")
+    if a.judge:
+        jf = open(os.path.join(out_dir, f"judge_seed{a.seed}.txt"), "w")
+        jf.write("step,calls_total,spent_total,invalid,agree_with_gold\n")
     if not full_budget:
         bf = open(os.path.join(out_dir, f"budget_seed{a.seed}.txt"), "w")
         bf.write("step,pairs_used,pairs_full,fraction\n")
@@ -296,6 +364,7 @@ def main():
     step = 0
     while step < a.steps:
         O, A, LP, ADV, RET = [], [], [], [], []
+        JG = []       # 裁判模式：每组的轨迹，批次结束后统一问裁判
         GROUPS = []   # pcrit_*：每组的比较标签和行号，批次收集完再算优势
         ep_events = []   # Courier：每回合 (踩花坛次数, 是否送达, 是否踩岩浆)
         noise_log = []   # 相关噪声：(真实符号, 给出的标签)，用来记录实际翻转率
@@ -357,6 +426,8 @@ def main():
                 adv = np.repeat(pair_matrix(Utot[:, None], np.ones((a.K, 1), bool), a.flip, rng), T, 1)
             elif a.algo == "grpo_step":
                 adv = zscore_masked(U, mask)
+            elif a.algo == "pair_step" and a.judge:
+                adv = np.zeros((a.K, T))   # 批次收集完后由裁判标签填
             elif a.algo == "pair_step" and a.noise == "iid" and full_budget:
                 adv = pair_matrix(U, mask, a.flip, rng)
             elif a.algo == "pair_step":
@@ -410,6 +481,8 @@ def main():
                 base.append(len(O))
                 O += t["o"]; A += t["a"]; LP += t["lp"]
                 ADV.append(adv[i, :lens[i]])
+            if a.judge:
+                JG.append(dict(traj=traj, lens=lens, T=T, U=U, start=len(ADV) - a.K))
             if pcrit is not None or a.algo == "rm_ppo":
                 # 只存比较结果 c ∈ {+1,0,−1}（由 oracle 给出），不存回报
                 if full_budget:
@@ -434,6 +507,8 @@ def main():
         while save_at and step >= save_at[0]:   # 保存的是采集本批数据的策略，以及当时的观测归一化统计量
             torch.save(dict(actor=actor.state_dict(), norm=(onorm.n, onorm.mean, onorm.m2), step=step),
                        os.path.join(out_dir, f"ckpt_seed{a.seed}_{save_at.pop(0)}.pt"))
+        if a.judge:
+            judge_fill(a, JG, ADV, judge, rng, jf, step)
         step += n_batch
         mean_ret = float(np.mean(ep_returns))
         w.writerow([step, mean_ret]); f.flush()

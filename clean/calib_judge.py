@@ -8,6 +8,7 @@
 """
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import random
@@ -96,8 +97,11 @@ class Judge:
                     time.sleep(min(60, 2 ** attempt + random.random()))
                     continue
                 raise RuntimeError(f"HTTP {e.code}: {e.read()[:300].decode(errors='replace')}")
-            except (urllib.error.URLError, TimeoutError):
-                time.sleep(min(60, 2 ** attempt))
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException):
+                # 网络层错误（含 RemoteDisconnected）一律退避重试
+                if attempt == 7:
+                    raise RuntimeError("网络错误，重试 8 次仍失败")
+                time.sleep(min(60, 2 ** attempt + random.random()))
         u = r.get("usageMetadata", {})
         cost = (u.get("promptTokenCount", 0) * PRICE_IN
                 + (u.get("candidatesTokenCount", 0) + u.get("thoughtsTokenCount", 0)) * PRICE_OUT) / 1e6
