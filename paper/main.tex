@@ -40,7 +40,7 @@ Using within-group win rates as the advantage in GRPO-style updates is not new; 
 \begin{enumerate}
 \item \textbf{What the ordinal update optimizes, and which noise hurts it} (Section~\ref{sec:theory}). The expected update ascends a win rate against the current policy; under deterministic rewards its only stable points are optimal, under stochastic rewards it can prefer a lower-mean action. Symmetric label noise that is concentrated near ties, and position bias, leave the expected update direction intact; only noise that also flips clear comparisons halves the signal. This predicts an experimental finding: at the same 25\% flip rate, independent flips collapse the method while near-tie and positional noise barely affect it.
 \item \textbf{A comparison-trained critic as a control variate} (Section~\ref{sec:method}). Comparing reward-to-go across trajectories at the same time step mixes the value of the state with the quality of the action. We train a state ranker from the same comparisons with a Bradley--Terry loss and subtract the comparison it predicts from the states alone. Because the correction depends only on states and on an independent trajectory, the expected update is unchanged. Two variants that let a learned model supply the advantage fail, which yields a design rule: the advantage must keep the observed comparison.
-\item \textbf{A pre-registered empirical study} (Section~\ref{sec:experiments}). Every main claim has its criteria written before the runs, 10--15 seeds, and multiple-comparison correction; we report the negative results. \todo{one-sentence summary of the headline findings once C1--C3 are in.}
+\item \textbf{A pre-registered empirical study} (Section~\ref{sec:experiments}). Every main claim has its criteria written before the runs, 10--15 seeds, and multiple-comparison correction; we report the negative results. Using comparisons instead of scalar returns has no detectable cost at the same granularity; with a real LLM judge, comparisons are about 7 points more accurate than pointwise scores; learning a reward model from the same comparisons is not better and is worse when per-step rewards explain the comparisons poorly; and 10\% of the comparisons suffice when they are spent on a few time points with all pairs. Comparisons do not close the gap to PPO on HalfCheetah, and they are not uniformly less sensitive to hyperparameters.
 \end{enumerate}
 
 %=====================================================================
@@ -214,7 +214,30 @@ Six environments (CartPole, Acrobot, LunarLander, Hopper, HalfCheetah, MiniGrid 
 
 \subsection{Cost of using comparisons only}
 \label{sec:exp-equal}
-\todo{C1 (pair vs.\ GRPO at the same granularity, 10 seeds, TOST) and C2 (non-inferiority to PPO after long training) --- running.}
+\begin{table}[h]
+\centering
+\caption{Cost of comparisons only. Top: per-step comparisons vs.\ GRPO with scalar returns at the same granularity (final return, 10 seeds); equivalence by TOST with a margin of 10\% of GRPO's improvement over a random policy. Bottom: after long training, per-step comparisons vs.\ PPO with scalar rewards and a critic; non-inferiority margin 10\%. All tests pre-registered, Holm-corrected.}
+\label{tab:cost}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccl}
+\toprule
+ & per-step comparisons & GRPO (scalar) & verdict \\
+\midrule
+HalfCheetah 3M & $1481\pm162$ & $1622\pm208$ & inconclusive \\
+Hopper 3M      & $1881\pm414$ & $1914\pm417$ & inconclusive \\
+LunarLander 2M & $262\pm4$    & $252\pm13$   & equivalent \\
+Acrobot 0.5M   & $-128\pm94$  & $-129\pm93$  & inconclusive \\
+\midrule
+ & per-step comparisons & PPO (scalar + critic) & verdict \\
+\midrule
+LunarLander 3M & $262\pm4$    & $235\pm19$    & non-inferior, significantly better \\
+Hopper 5M      & $2057\pm393$ & $1978\pm386$  & non-inferiority not established \\
+HalfCheetah 3M & $1483\pm163$ & $4495\pm1031$ & worse \\
+\bottomrule
+\end{tabular}
+\end{table}
+No difference between per-step comparisons and GRPO is significant on any environment, but equivalence within 10\% is established only on LunarLander; on the other three the seed-to-seed variance is too large to conclude either way. After long training, comparisons are non-inferior to and significantly better than PPO on LunarLander ($p=0.009$); on Hopper the difference is not significant and non-inferiority is not established. On HalfCheetah PPO is about three times better.
 
 \subsection{Per-step credit from a comparison-trained critic}
 \label{sec:exp-critic}
@@ -256,7 +279,22 @@ Acrobot 0.5M   & $-128$ & $-86$  & $-208$ & $-127$ & 0.80 \\
 \end{table}
 
 \subsection{Goal-oriented sparse reward}
-On MiniGrid DoorKey-5$\times$5 (reward only on reaching the goal, variable episode length), the per-step and critic variants reach 100\% success on all seeds; area under the learning curve is not measurably different from PPO, GRPO, or the reward-model route, while SPO is 22\% slower ($p_{\text{Holm}}=0.0025$). Larger maps were excluded by a pre-registered rule because PPO itself fails on some seeds there. \todo{table.}
+On MiniGrid DoorKey-5$\times$5 (reward only on reaching the goal, variable episode length), the per-step and critic variants reach 100\% success on all seeds; area under the learning curve is not measurably different from PPO, GRPO, or the reward-model route, while SPO is 22\% slower ($p_{\text{Holm}}=0.0025$). Larger maps were excluded by a pre-registered rule because PPO itself fails on some seeds there.
+
+\begin{table}[h]
+\centering
+\caption{MiniGrid DoorKey-5$\times$5, 500k steps, 10 seeds. AUC is the mean return over training (primary metric).}
+\label{tab:goal}
+\small
+\begin{tabular}{lcccccc}
+\toprule
+ & PPO & GRPO & per-step & +critic (ours) & RM + PPO & SPO \\
+\midrule
+AUC           & $0.803$ & $0.841$ & $0.830$ & $0.833$ & $0.812$ & $0.649$ \\
+final success & $0.96$  & $1.00$  & $1.00$  & $1.00$  & $0.99$  & $1.00$ \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \subsection{Comparing versus scoring with an LLM judge}
 \label{sec:exp-judge}
@@ -299,10 +337,26 @@ per-step       & $262$ & $\mathbf{71}$ & $258$ & $250$ & $249$ \\
 
 \subsection{Comparison budget}
 \label{sec:exp-budget}
-\todo{Table: retention under r1 / L10 / r1L10; sparse-in-time, full-in-pairs keeps 99\% on HalfCheetah at 10\% of labels, LunarLander 98--100\% down to 1.5\%.}
+\begin{table}[h]
+\centering
+\caption{Retention of final return relative to the full label budget (all pairs at every step), 10 seeds. ``One pair per step'': a random perfect matching at every step ($\approx15\%$ of labels). ``All pairs every 10 steps'': $\approx10\%$. Both combined: $\approx1.5\%$. Bold: significantly worse than full budget (Holm).}
+\label{tab:budget}
+\small
+\begin{tabular}{lccc}
+\toprule
+ & one pair per step & all pairs every 10 steps & both \\
+\midrule
+LunarLander, per-step       & 0.98 & 1.02 & 0.98 \\
+LunarLander, +critic        & 0.98 & 1.02 & 1.00 \\
+HalfCheetah, per-step       & \textbf{0.81} & 0.99 & \textbf{0.83} \\
+HalfCheetah, +critic        & \textbf{0.69} & 0.77 & \textbf{0.64} \\
+\bottomrule
+\end{tabular}
+\end{table}
+At a similar budget, comparing all pairs at a few time points is far better than comparing one pair at every step: a single comparison makes each advantage a noisy $\pm1$, while reward-to-go changes little within ten steps. The critic variant loses its full-budget advantage at reduced budgets, possibly because its critic receives far fewer training pairs with a fixed number of epochs (not tested).
 
 \subsection{Sensitivity to hyperparameters}
-\todo{C3 --- running.}
+Over a $3\times3$ grid of learning rate and update epochs with 10 seeds per setting, we measure the worst-setting retention $(\text{AUC}_{\min}-R_0)/(\text{AUC}_{\max}-R_0)$. On LunarLander, per-step comparisons ($0.89$) and GRPO ($0.86$) are far more robust than PPO ($0.54$; difference to comparisons $+0.35$, 95\% CI $[0.28, 0.41]$). On Acrobot the order reverses: PPO $0.92$, GRPO $0.83$, comparisons $0.74$ (difference $-0.31$ $[-0.54,-0.13]$). Comparisons and GRPO do not differ on either task. An earlier 3-seed sweep had suggested that comparisons are the least sensitive method; the pre-registered 10-seed test does not support that claim, and we do not make it.
 
 %=====================================================================
 \section{Limitations}
