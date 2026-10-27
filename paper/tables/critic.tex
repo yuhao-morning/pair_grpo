@@ -1,0 +1,10 @@
+\begin{tabular}{lcccccc}
+\toprule
+ & \multicolumn{2}{c}{scalar reward} & \multicolumn{4}{c}{comparisons only} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-7}
+ & PPO & GiGPO & per-step & +critic (ours) & model-only $Q$ & doubly robust \\
+\midrule
+HalfCheetah & $4488\pm1026$ & $334\pm138$ & $1481\pm162$ & $2196\pm523$ & $798\pm193$ & $1766\pm359$ \\
+Hopper & $1761\pm302$ & $1719\pm389$ & $1881\pm414$ & $2114\pm171$ & $522\pm226$ & $2189\pm427$ \\
+\bottomrule
+\end{tabular}

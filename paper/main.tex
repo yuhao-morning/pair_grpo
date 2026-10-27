@@ -8,6 +8,11 @@
 \usepackage{xcolor}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
+\usepackage{graphicx}
+\usepackage{adjustbox}
+\emergencystretch=3em
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit}
 
 \newtheorem{theorem}{Theorem}
 \newtheorem{proposition}{Proposition}
@@ -33,7 +38,7 @@ Policy-gradient methods need a scalar reward, yet for many tasks no formula capt
 \section{Introduction}
 \label{sec:intro}
 
-Policy-gradient methods need a scalar reward, but for many tasks no formula captures every property we want, and a hand-written reward introduces bias that the policy will happily exploit. Judging which of two outcomes is better is often easier and more reliable than assigning either a score. The question we study is what reinforcement learning can do with that weaker signal alone: no reward function, no reward model, only comparisons.
+Policy-gradient methods need a scalar reward, but for many tasks no formula captures every property we want, and a hand-written reward introduces bias that the policy will happily exploit. Judging which of two outcomes is better is often easier and more reliable than assigning either a score; this is the premise of learning from human preferences~\citep{christiano2017deep,ouyang2022instructgpt}, usually through a learned reward model or offline objectives such as DPO~\citep{rafailov2023dpo}. The question we study is what reinforcement learning can do with that weaker signal alone: no reward function, no reward model, only comparisons.
 
 Using within-group win rates as the advantage in GRPO-style updates is not new; it has been proposed for text-to-image models~\citep{wang2025prefgrpo}, LLM agents~\citep{zhang2026arenarl,yang2026tournament}, rank-only advantages~\citep{choi2026gopo}, and, at the trajectory level, for continuous control~\citep{swamy2024minimaximalist}. The same estimator is the centered-rank fitness shaping of evolution strategies~\citep{wierstra2014nes,salimans2017es}. What has not been worked out is how to use comparisons for \emph{per-step} credit in multi-step tasks, what such updates actually optimize, and how they behave under the label noise real judges produce.
 
@@ -49,10 +54,10 @@ Using within-group win rates as the advantage in GRPO-style updates is not new; 
 \label{sec:related}
 
 \paragraph{Win-rate and rank advantages.}
-Centered ranks were introduced as fitness shaping in natural evolution strategies~\citep{wierstra2014nes,salimans2017es}. In policy optimization for language and image models, within-group pairwise win rates or rank-only advantages replace scalar rewards in GRPO~\citep{shao2024grpo} variants~\citep{wang2025prefgrpo,choi2026gopo,zhang2026arenarl,yang2026tournament}. These operate on whole responses or whole trajectories. Self-play formulations~\citep{munos2023nash,wu2024sppo,swamy2024minimaximalist} make the win-rate objective explicit; \citet{dudik2015contextual} and \citet{zhang2025winrate} relate it to reward maximization. We use these results as lemmas and study the multi-step, per-step setting they leave open.
+Centered ranks were introduced as fitness shaping in natural evolution strategies~\citep{wierstra2014nes,salimans2017es}. In policy optimization for language and image models, within-group pairwise win rates or rank-only advantages replace scalar rewards in variants of GRPO~\citep{shao2024grpo} and RLOO-style group baselines~\citep{ahmadian2024rloo}~\citep{wang2025prefgrpo,choi2026gopo,zhang2026arenarl,yang2026tournament}. These operate on whole responses or whole trajectories. Self-play formulations~\citep{munos2023nash,wu2024sppo,swamy2024minimaximalist} make the win-rate objective explicit; \citet{dudik2015contextual} and \citet{zhang2025winrate} relate it to reward maximization. We use these results as lemmas and study the multi-step, per-step setting they leave open.
 
 \paragraph{Preference-based RL.}
-The classic route learns a reward model from trajectory or segment preferences and then runs RL~\citep{christiano2017deep,lee2021pebble}. Reward-model-free alternatives learn advantages or Q-functions directly from preferences offline~\citep{knox2024advantage,hejna2024cpl,hejna2023ipl}, or estimate policy-value differences online~\citep{zhang2025zpg,assmus2026sp3o}. We compare against the reward-model route with exactly the same comparisons, and against trajectory-level self-play~\citep{swamy2024minimaximalist}.
+The classic route learns a reward model from trajectory or segment preferences and then runs RL~\citep{christiano2017deep,lee2021pebble}, including with vision-language models as the source of preferences~\citep{wang2024rlvlmf}; learned reward models can be over-optimized~\citep{gao2023overoptimization}. Reward-model-free alternatives learn advantages or Q-functions directly from preferences offline~\citep{knox2024advantage,hejna2024cpl,hejna2023ipl}, or estimate policy-value differences online~\citep{zhang2025zpg,assmus2026sp3o}. We compare against the reward-model route with exactly the same comparisons, and against trajectory-level self-play~\citep{swamy2024minimaximalist}.
 
 \paragraph{Per-step credit without a critic.}
 Comparing reward-to-go across rollouts at the same time index goes back to PI$^2$~\citep{theodorou2010pi2}; anchor-state grouping~\citep{feng2025gigpo} and Monte Carlo rollouts from intermediate states~\citep{kazemnejad2025vineppo} assign per-step credit with scalar rewards. Our setting removes the scalar.
@@ -60,9 +65,55 @@ Comparing reward-to-go across rollouts at the same time index goes back to PI$^2
 \paragraph{Ties and judge noise.}
 Ties have been modeled in offline preference optimization~\citep{chen2025dpoties}. LLM judges show strong position bias~\citep{yagubyan2026coinflip}; our noise analysis covers that case.
 
+
+\begin{table}[t]
+\centering
+\caption{Closest prior work. ``Signal'': what the learner observes. ``Credit'': granularity at which credit is assigned. RM: a reward model is fitted.}
+\label{tab:related}
+\small
+\adjustbox{max width=\linewidth}{\begin{tabular}{lllcc}
+\toprule
+method & signal & credit & RM & online \\
+\midrule
+Christiano et al.\ / PEBBLE~\citep{christiano2017deep,lee2021pebble} & segment preferences & per step, via $\hat r$ & yes & yes \\
+CPL / IPL~\citep{hejna2024cpl,hejna2023ipl} & segment preferences & per step (advantage/$Q$) & no & no \\
+ZPG / SP3O~\citep{zhang2025zpg,assmus2026sp3o} & trajectory/segment preferences & policy-value difference & no & yes \\
+SPO~\citep{swamy2024minimaximalist} & trajectory preferences & trajectory & no & yes \\
+Pref-GRPO, GOPO, ArenaRL, Tournament-GRPO~\citep{wang2025prefgrpo,choi2026gopo,zhang2026arenarl,yang2026tournament} & pairwise / rank in group & response or trajectory & no & yes \\
+GiGPO, GR2PO, PI$^2$~\citep{feng2025gigpo,theodorou2010pi2} & scalar reward & per step (grouped) & no & yes \\
+\midrule
+this work & pairwise, ties allowed & per step (+ comparison critic) & no & yes \\
+\bottomrule
+\end{tabular}}
+\end{table}
+
 %=====================================================================
 \section{Method}
 \label{sec:method}
+
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[font=\small, >=Stealth, node distance=4mm]
+  \node[circle, draw, inner sep=1.5pt] (s0) at (0,0) {$s_0$};
+  \foreach \y/\n in {1.2/1, 0.4/2, -0.4/3, -1.2/K} {
+    \draw[->, thick, gray!70] (s0) .. controls (0.8,\y) .. (6.2,\y) node[right, black] {$\tau^{\n}$};
+  }
+  \foreach \x/\lab in {1.8/{t_1}, 3.6/{t_2}, 5.4/{t_3}} {
+    \draw[dashed, gray] (\x,1.55) -- (\x,-1.55);
+    \node[below] at (\x,-1.55) {$\lab$};
+    \foreach \y in {1.2, 0.4, -0.4, -1.2} { \fill (\x,\y) circle (1.3pt); }
+  }
+  \node[draw, rounded corners, align=center, fill=gray!8] (judge) at (9.3,0.75)
+    {comparisons at $t$\\[1pt] $c^{ij}_t\in\{-1,0,+1\}$, all pairs\\[1pt]\footnotesize (oracle, human or LLM judge)};
+  \node[draw, rounded corners, align=center, fill=gray!8] (adv) at (9.3,-0.95)
+    {$\tilde A^i_t=\mathrm{mean}_j\big[c^{ij}_t-\hat c(s^i_t,s^j_t)\big]$\\[1pt]\footnotesize $\hat c$: critic trained on the same labels};
+  \draw[->] (6.9,0.75) -- (judge.west);
+  \draw[->] (judge) -- (adv);
+  \draw[->] (adv.south) -- ++(0,-0.45) node[below] {PPO-clip update; actions in a window share the advantage of its start};
+\end{tikzpicture}
+\caption{Per-step comparison policy optimization. $K$ trajectories start from a shared state. At a few time points, every pair of still-running trajectories is compared on what happened from that point on; no scalar reward is observed. Each action's advantage is its mean comparison outcome minus the outcome a comparison-trained critic predicts from the two states alone.}
+\label{fig:method}
+\end{figure}
 
 \subsection{Setting}
 An agent interacts with an episodic MDP with policy $\pi_\theta$. Each update samples groups of $K$ trajectories $\tau^1,\dots,\tau^K$ that start from the same initial state and then evolve independently. For trajectory $i$ let $T_i$ be its length and $G^i_t=\sum_{k=t}^{T_i-1}\gamma^{k-t}r^i_k$ its reward-to-go, defined for $t<T_i$. The algorithm never observes $r$ or $G$. It observes only comparison labels
@@ -80,7 +131,7 @@ The per-step comparison advantage of the action $a^i_t$ is the mean comparison a
 set to zero when $|A_t|<2$. It is plugged into the clipped surrogate of PPO~\citep{schulman2017ppo}; advantages are divided by their batch standard deviation (not re-centered, since \eqref{eq:pair} already sums to zero within each $(\text{group},t)$).
 
 \subsection{Comparison-trained critic}
-Trajectories compared at the same $t$ sit in different states, so $c^{ij}_t$ reflects both how good $s^i_t$ is and how good the subsequent actions were. We learn a state ranker $V_\phi$ from the same labels with a Bradley--Terry loss,
+Trajectories compared at the same $t$ sit in different states, so $c^{ij}_t$ reflects both how good $s^i_t$ is and how good the subsequent actions were. We learn a state ranker $V_\phi$ from the same labels with a Bradley--Terry loss~\citep{bradley1952rank},
 \begin{equation}
 \label{eq:bt}
 \begin{split}
@@ -140,7 +191,7 @@ For noiseless labels with a random reward $R$, $W_\pi(a)=\Pr(R(a)>R(b))-\Pr(R(a)
 With $K$ i.i.d.\ samples from $\pi_\theta$, $\E\big[\hat A^i\,\big|\,a^i\big]=W_{\pi_\theta}(a^i)$. Hence the expected update $\E[\nabla_\theta\log\pi_\theta(a^i)\hat A^i]$ equals $\nabla_{\theta'}\E_{a\sim\pi_{\theta'}}[W_{\pi_\theta}(a)]\big|_{\theta'=\theta}$, the gradient of the win rate against a frozen copy of the current policy.
 \end{lemma}
 \begin{proof}
-Given $a^i$, the other $K-1$ samples are independent draws from $\pi_\theta$, so each $c(a^i,a^j)$ has conditional mean $W_{\pi_\theta}(a^i)$. The second statement is the score-function identity with $W_{\pi_\theta}$ held fixed.
+Given $a^i$, the other $K-1$ samples are independent draws from $\pi_\theta$, so each $c(a^i,a^j)$ has conditional mean $W_{\pi_\theta}(a^i)$. The second statement is the score-function identity~\citep{williams1992reinforce} with $W_{\pi_\theta}$ held fixed.
 \end{proof}
 
 \begin{proposition}[Deterministic rewards: only optimal policies are stable]
@@ -260,7 +311,14 @@ Theorem~\ref{thm:multistep} was checked on five random MDPs with stochastic tran
 \label{sec:experiments}
 
 \paragraph{Protocol.}
-Six environments (CartPole, Acrobot, LunarLander, Hopper, HalfCheetah, MiniGrid DoorKey-5$\times$5). All methods share the actor, PPO-clip settings and data collection: $K=8$ trajectories per group from a shared initial state, 8192 steps per update. Labels are generated from the environment return; the algorithms see only labels. Every main claim was pre-registered with its test, correction, and decision rule before the runs; tuning seeds are disjoint from evaluation seeds. We report mean $\pm$ 95\% confidence interval over 10 seeds unless stated, Welch $t$-tests with Holm correction within each family, and Mann--Whitney tests as a check. \todo{link to code and pre-registration files.}
+Six environments (CartPole, Acrobot, LunarLander, Hopper, HalfCheetah, MiniGrid DoorKey-5$\times$5). All methods share the actor, PPO-clip settings~\citep{schulman2017ppo} and data collection (PPO additionally learns a critic with GAE~\citep{schulman2016gae}): $K=8$ trajectories per group from a shared initial state, 8192 steps per update. Labels are generated from the environment return; the algorithms see only labels. Every main claim was pre-registered with its test, correction, and decision rule before the runs; tuning seeds are disjoint from evaluation seeds. We report mean $\pm$ 95\% confidence interval over 10 seeds unless stated, Welch $t$-tests with Holm correction within each family, and Mann--Whitney tests as a check. Code, raw results, and every pre-registration file (written before the corresponding runs) are in the supplementary material; Appendix~\ref{app:prereg} summarizes them and Appendix~\ref{app:deviations} lists every deviation and bug we found. Figure~\ref{fig:curves} shows learning curves.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/curves.pdf}
+\caption{Learning curves (mean and 95\% confidence band over 10 seeds; HalfCheetah and Hopper 3M steps, LunarLander 2M, Acrobot 0.5M). PPO uses scalar rewards; the other methods see only comparisons. Final values are in Tables~\ref{tab:critic} and~\ref{tab:rm}.}
+\label{fig:curves}
+\end{figure}
 
 \subsection{Cost of using comparisons only}
 \label{sec:exp-equal}
@@ -270,22 +328,7 @@ Six environments (CartPole, Acrobot, LunarLander, Hopper, HalfCheetah, MiniGrid 
 \label{tab:cost}
 \small
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{lccl}
-\toprule
- & per-step comparisons & GRPO (scalar) & verdict \\
-\midrule
-HalfCheetah 3M & $1481\pm162$ & $1622\pm208$ & inconclusive \\
-Hopper 3M      & $1881\pm414$ & $1914\pm417$ & inconclusive \\
-LunarLander 2M & $262\pm4$    & $252\pm13$   & equivalent \\
-Acrobot 0.5M   & $-128\pm94$  & $-129\pm93$  & inconclusive \\
-\midrule
- & per-step comparisons & PPO (scalar + critic) & verdict \\
-\midrule
-LunarLander 3M & $262\pm4$    & $235\pm19$    & non-inferior, significantly better \\
-Hopper 5M      & $2057\pm393$ & $1978\pm386$  & non-inferiority not established \\
-HalfCheetah 3M & $1483\pm163$ & $4495\pm1031$ & worse \\
-\bottomrule
-\end{tabular}
+\adjustbox{max width=\linewidth}{\input{tables/cost}}
 \end{table}
 No difference between per-step comparisons and GRPO is significant on any environment, but equivalence within 10\% is established only on LunarLander; on the other three the seed-to-seed variance is too large to conclude either way. After long training, comparisons are non-inferior to and significantly better than PPO on LunarLander ($p=0.009$); on Hopper the difference is not significant and non-inferiority is not established. On HalfCheetah PPO is about three times better.
 
@@ -297,16 +340,7 @@ No difference between per-step comparisons and GRPO is significant on any enviro
 \label{tab:critic}
 \small
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccccc}
-\toprule
- & \multicolumn{2}{c}{scalar reward} & \multicolumn{4}{c}{comparisons only} \\
-\cmidrule(lr){2-3}\cmidrule(lr){4-7}
- & PPO & GiGPO & per-step & +critic (ours) & model-only $Q$ & doubly robust \\
-\midrule
-HalfCheetah & $4495\pm1031$ & $337\pm139$ & $1483\pm163$ & $2203\pm525$ & $801\pm196$ & $1766\pm359$ \\
-Hopper      & $1765\pm304$ & $1720\pm388$ & $1884\pm417$ & $2110\pm175$ & $511\pm219$ & $2189\pm427$ \\
-\bottomrule
-\end{tabular}
+\adjustbox{max width=\linewidth}{\input{tables/critic}}
 \end{table}
 The critic variant is significantly better than the critic-free update on HalfCheetah ($p=0.013$, AUC $p=0.006$) and has the smallest seed-to-seed spread on Hopper, where the difference is not significant. Letting the learned model supply the advantage directly ($Q(s,a)-\E_{a'}Q(s,a')$, ``model-only'') learns fastest for about 1.2M steps and then degrades steadily while the critic's pairwise accuracy stays constant at about 0.67: the policy exploits errors of the critic along the action dimension, which pairwise accuracy between states does not measure. A doubly robust combination that keeps the observed comparison as a correction does not degrade but is not better than the state-ranker critic; an ablation attributes this to the critic type (a state value obtained by averaging a learned $Q$ over actions is a worse baseline than a directly learned $V$). GiGPO's anchor-state grouping finds repeated states only at the shared initial state in continuous control and reduces to trajectory-level grouping. Every comparison-only variant remains about $2\times$ below PPO on HalfCheetah.
 
@@ -316,16 +350,7 @@ The critic variant is significantly better than the critic-free update on HalfCh
 \centering
 \caption{Final return, 10 seeds. ``Reward model + PPO'' learns $\hat r(s,a)$ from exactly the same comparisons. Pre-registered verdict: comparable; the reward-model route is significantly worse on LunarLander (Holm), where it explains only about 70\% of the comparisons.}
 \label{tab:rm}
-\begin{tabular}{lccccc}
-\toprule
- & per-step & + critic (ours) & reward model + PPO & SPO & RM accuracy \\
-\midrule
-HalfCheetah 3M & $1481$ & $2196$ & $2371$ & $1310$ & 0.99 \\
-Hopper 3M      & $1881$ & $2114$ & $1827$ & $2564$ & 1.00 \\
-LunarLander 2M & $262$  & $258$  & $205$  & $102$  & 0.70 \\
-Acrobot 0.5M   & $-128$ & $-86$  & $-208$ & $-127$ & 0.80 \\
-\bottomrule
-\end{tabular}
+\adjustbox{max width=\linewidth}{\input{tables/rm}}
 \end{table}
 
 \subsection{Goal-oriented sparse reward}
@@ -336,14 +361,7 @@ On MiniGrid DoorKey-5$\times$5 (reward only on reaching the goal, variable episo
 \caption{MiniGrid DoorKey-5$\times$5, 500k steps, 10 seeds. AUC is the mean return over training (primary metric).}
 \label{tab:goal}
 \small
-\begin{tabular}{lcccccc}
-\toprule
- & PPO & GRPO & per-step & +critic (ours) & RM + PPO & SPO \\
-\midrule
-AUC           & $0.803$ & $0.841$ & $0.830$ & $0.833$ & $0.812$ & $0.649$ \\
-final success & $0.96$  & $1.00$  & $1.00$  & $1.00$  & $0.99$  & $1.00$ \\
-\bottomrule
-\end{tabular}
+\adjustbox{max width=\linewidth}{\input{tables/goal}}
 \end{table}
 
 \subsection{Comparing versus scoring with an LLM judge}
@@ -356,15 +374,15 @@ Does a real judge compare more reliably than it scores? Without training, we col
 \label{tab:judge}
 \small
 \setlength{\tabcolsep}{4pt}
-\begin{tabular}{lcccccc}
-\toprule
-judge & score each & rank group & compare two & score ties & rank $-$ score & compare $-$ score \\
-\midrule
-Flash-Lite & 0.571 & 0.643 & 0.652 & 47\% & $+7.2$ $[5.5, 9.0]$ & $+8.2$ $[5.3, 11.2]$ \\
-Flash      & 0.553 & 0.657 & 0.660 & 51\% & $+10.5$ $[8.5, 12.5]$ & $+9.9$ $[6.2, 13.6]$ \\
-\bottomrule
-\end{tabular}
+\adjustbox{max width=\linewidth}{\input{tables/judge}}
 \end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.75\linewidth]{figures/judge.pdf}
+\caption{Effective accuracy of LLM judges by the size of the true gap $z$. Near ties every format is near chance; for clear differences comparison (ranking or direct) is 10--15 points more accurate than scoring.}
+\label{fig:judge}
+\end{figure}
 
 Comparison beats scoring for both judges, and the gap \emph{widens} with the stronger judge: Flash ranks more accurately than Flash-Lite ($+1.4$ points $[0.3, 2.5]$) but scores less accurately ($-1.8$ $[-3.3,-0.2]$), because its scores polarize (274 descriptions receive 0 and 731 receive 9), so half of the score-derived pairs within a checkpoint are ties, whereas its rankings almost never tie (2.7\%) and are more consistent across presentation orders (0.87 vs.\ 0.74). Near ties ($z<0.5$) every format is close to chance, which is the noise type of Proposition~\ref{prop:noise}(b).
 
@@ -376,14 +394,7 @@ Absolute accuracy is modest, and much of it reflects a mismatch between the stat
 \centering
 \caption{LunarLander final return under label noise with a matched flip rate of about 25\%. Independent flips collapse the critic-free method; near-tie and positional noise, which leave the expected update intact (Proposition~\ref{prop:noise}), barely affect it.}
 \label{tab:noise}
-\begin{tabular}{lccccc}
-\toprule
- & clean & independent & near-tie & position (72\%) & unsure$\to$first \\
-\midrule
-per-step       & $262$ & $\mathbf{71}$ & $258$ & $250$ & $249$ \\
-+ critic (ours) & $258$ & $259$ & $261$ & $263$ & $263$ \\
-\bottomrule
-\end{tabular}
+\adjustbox{max width=\linewidth}{\input{tables/noise}}
 \end{table}
 
 \subsection{Comparison budget}
@@ -393,21 +404,31 @@ per-step       & $262$ & $\mathbf{71}$ & $258$ & $250$ & $249$ \\
 \caption{Retention of final return relative to the full label budget (all pairs at every step), 10 seeds. ``One pair per step'': a random perfect matching at every step ($\approx15\%$ of labels). ``All pairs every 10 steps'': $\approx10\%$. Both combined: $\approx1.5\%$. Bold: significantly worse than full budget (Holm).}
 \label{tab:budget}
 \small
-\begin{tabular}{lccc}
-\toprule
- & one pair per step & all pairs every 10 steps & both \\
-\midrule
-LunarLander, per-step       & 0.98 & 1.02 & 0.98 \\
-LunarLander, +critic        & 0.98 & 1.02 & 1.00 \\
-HalfCheetah, per-step       & \textbf{0.81} & 0.99 & \textbf{0.83} \\
-HalfCheetah, +critic        & \textbf{0.69} & 0.77 & \textbf{0.64} \\
-\bottomrule
-\end{tabular}
+\adjustbox{max width=\linewidth}{\input{tables/budget}}
 \end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.5\linewidth]{figures/budget.pdf}
+\caption{Retention of final return under reduced comparison budgets (hatched: HalfCheetah). Spending labels on all pairs at a few time points keeps performance; one pair per step does not.}
+\label{fig:budget}
+\end{figure}
 At a similar budget, comparing all pairs at a few time points is far better than comparing one pair at every step: a single comparison makes each advantage a noisy $\pm1$, while reward-to-go changes little within ten steps. The critic variant loses its full-budget advantage at reduced budgets, possibly because its critic receives far fewer training pairs with a fixed number of epochs (not tested).
 
 \subsection{Sensitivity to hyperparameters}
 Over a $3\times3$ grid of learning rate and update epochs with 10 seeds per setting, we measure the worst-setting retention $(\text{AUC}_{\min}-R_0)/(\text{AUC}_{\max}-R_0)$. On LunarLander, per-step comparisons ($0.89$) and GRPO ($0.86$) are far more robust than PPO ($0.54$; difference to comparisons $+0.35$, 95\% CI $[0.28, 0.41]$). On Acrobot the order reverses: PPO $0.92$, GRPO $0.83$, comparisons $0.74$ (difference $-0.31$ $[-0.54,-0.13]$). Comparisons and GRPO do not differ on either task. An earlier 3-seed sweep had suggested that comparisons are the least sensitive method; the pre-registered 10-seed test does not support that claim, and we do not make it.
+
+%=====================================================================
+\section{Practical guidance}
+\label{sec:guidance}
+\begin{itemize}
+\item \textbf{Spend labels on all pairs at a few time points.} At about 10\% of the full budget, comparing all pairs every 10 steps keeps performance, whereas one comparison per step at every step does not (Section~\ref{sec:exp-budget}).
+\item \textbf{Ask judges to compare, not to score.} With LLM judges, ranking or pairwise comparison is 7--10 points more accurate than 0--10 scores, and a listwise ranking of $K$ outcomes yields all $\binom{K}{2}$ labels in one call, whereas independent scoring needs $K$ calls.
+\item \textbf{Allow ties and do not worry about near-tie noise.} Errors concentrated near ties and position bias leave the expected update intact (Proposition~\ref{prop:noise}); they cost variance, not direction.
+\item \textbf{Use the comparison-trained critic when states diverge and labels are plentiful;} keep the observed comparison in the advantage. Never let a learned model supply the advantage alone (Section~\ref{sec:exp-critic}).
+\item \textbf{Check whether a per-step reward explains the comparisons} before fitting a reward model: if its pairwise accuracy is well below one, compare directly instead (Section~\ref{sec:exp-rm}).
+\item \textbf{Mind stochastic outcomes.} The update prefers actions that win more often, not those with higher mean (Proposition~\ref{prop:skew}); if rare large losses matter, comparisons alone will under-weight them.
+\end{itemize}
 
 %=====================================================================
 \section{Limitations}
@@ -419,7 +440,148 @@ Over a $3\times3$ grid of learning rate and update epochs with 10 seeds per sett
 \item Small networks and classic control tasks; harder goal-oriented tasks are limited by exploration, where comparisons among all-failing groups carry no signal.
 \end{itemize}
 
+
+\section*{Reproducibility statement}
+All experiments run on a single CPU machine; every number in the tables is regenerated from the raw per-seed logs by one script (\texttt{paper\_assets.py}) with a single definition of each metric. Each main claim has a pre-registration file written before its runs, listing the test, the correction, the decision rule and our predictions; Appendix~\ref{app:prereg} summarizes them, including the predictions that turned out wrong, and Appendix~\ref{app:deviations} lists every deviation. Judge prompts are given verbatim in Appendix~\ref{app:prompts}; all judge requests and responses are cached and released.
+
 \bibliographystyle{plainnat}
 \bibliography{refs}
+
+\clearpage
+\appendix
+\section{Implementation details}
+\label{app:impl}
+
+\begin{table}[h]
+\centering
+\caption{Hyperparameters shared by all methods unless stated. No method was tuned on evaluation seeds.}
+\label{tab:hparams}
+\small
+\begin{tabular}{p{3.6cm}p{11.6cm}}
+\toprule
+actor & MLP $128$--$128$, tanh; categorical (discrete) or Gaussian with state-independent log-std (continuous) \\
+observation normalization & running mean/std, clipped to $[-10,10]$, shared by all methods \\
+group size $K$ / batch & 8 trajectories per group from a shared reset seed; groups until $\ge 8192$ steps per update \\
+PPO-clip & $\epsilon=0.2$, lr $3\cdot10^{-4}$ (Adam), 10 epochs, minibatch 512, gradient-norm clip 0.5 \\
+discount & $\gamma=0.99$ (labels compare discounted reward-to-go) \\
+advantage scaling & comparison/GRPO advantages divided by batch std (not re-centered); PPO: batch z-score \\
+PPO critic & MLP $128$--$128$, GAE $\lambda=0.95$, separate Adam optimizer \\
+comparison critic & MLP $128$--$128$ on observations; Bradley--Terry loss, lr $10^{-3}$, 4 epochs, $\le 4\cdot10^4$ pairs per update, minibatch 1024; trained after the advantages of the batch are computed \\
+model-only $Q$ / doubly robust & $Q$-network on $(s,a)$, same training; $M=8$ sampled actions per state \\
+reward model + PPO & $\hat r(s,a)$ MLP $128$--$128$; Bradley--Terry on discounted sums of $\hat r$; buffer of the last 5 updates, 2 epochs per update; $\hat r$ scaled by batch std \\
+SPO & queue of the last 64 trajectories; score in $[-1,1]$ split evenly over the trajectory's steps; PPO with critic (the original uses SAC for continuous control) \\
+GiGPO & episode-level z-score $+\,1.0\times$ z-score within groups of identical states \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{Environments and budgets.} Gymnasium CartPole-v1 (0.4M steps), Acrobot-v1 (0.5M), LunarLander-v3 (2M; 3M for long runs), Hopper-v4 and HalfCheetah-v4 (3M; 5M and 12M for long runs), MiniGrid DoorKey-5$\times$5 (0.5M; flattened $7\times7\times3$ egocentric view). ``Final'' is the mean logged return over the last 10\% of the nominal step budget; AUC is the mean of 50 equal-width step bins. Seeds: evaluation seeds 1--10 (0--9 for long runs), tuning seeds 100--109, pilot seeds 0 and 100--101; pilot runs never enter evaluation.
+
+\paragraph{Comparison budget.} ``One pair per step'' draws a random perfect matching of the running trajectories at every step; ``every 10 steps'' compares all pairs at $t\in\{0,10,20,\dots\}$ and lets the actions of each window share the advantage of its start.
+
+\section{Pre-registered experiments}
+\label{app:prereg}
+Each row had a file with tests, corrections, decision rule and predictions written before its runs.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{p{3.4cm}p{5.8cm}p{5.2cm}}
+\toprule
+experiment & decision & predictions that were wrong \\
+\midrule
+comparison critic (Sec.~\ref{sec:exp-critic}) & critic beats critic-free on HalfCheetah ($p=0.013$); model-only and doubly robust variants do not help & doubly robust would help \\
+reward model and SPO (Sec.~\ref{sec:exp-rm}) & comparable; reward model significantly worse on LunarLander & reward model similar to comparisons on LunarLander and Acrobot; SPO strong on Hopper not anticipated \\
+goal-oriented task & comparisons usable (100\% success); SPO 22\% slower & comparisons 10--15\% slower than PPO; SPO competitive \\
+label noise, independent & critic significantly more robust at 25\% flips & --- \\
+label noise, correlated & does not generalize (0/6 significant) & critic advantage persists under position bias \\
+comparison budget & LunarLander robust at all budgets; HalfCheetah only for all-pairs-every-10-steps & critic more label-efficient; every-10-steps hurts HalfCheetah \\
+ties and local optima (15 seeds) & ties do not change the escape rate & ties help escape \\
+10-seed confirmation & equivalence to GRPO only on LunarLander; non-inferiority to PPO only on LunarLander; ``least hyperparameter-sensitive'' not supported & equivalence on Acrobot; comparisons more robust than PPO on both tasks \\
+LLM judge v1/v2 & comparison more accurate than scoring for both judges & large-gap accuracy near 1; wording fix helps; stronger judge narrows the gap \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Deviations, bugs and reruns}
+\label{app:deviations}
+We list every issue found during the project; none affects a reported number after the stated fix.
+\begin{enumerate}
+\item An early version stored observations as views into a reused array, so stored states were overwritten; found in a sanity check before any reported run.
+\item While adding the comparison critic, an edit displaced PPO's return collection; caught in a pilot, fixed, and PPO's output was verified to be line-for-line identical to earlier runs before all later experiments.
+\item The first SPO implementation gave the score only at the final step and failed on CartPole; it was corrected to the published algorithm (score split over steps, queue of recent trajectories) before the pre-registered run.
+\item A noise-scale fallback produced near-zero noise on Acrobot when all first-batch returns were equal; the affected noise runs were discarded and rerun with a corrected scale.
+\item The first LLM-judge descriptions called time-limit episodes ``still flying'' even when the lander stood on its legs; the corrected run changed no accuracy measurably and is the one reported.
+\item A pilot judge run overwrote the stored judgments of the first full run; they were rebuilt from the request cache without new calls and the analysis output was verified identical.
+\item The stronger judge reached its spending cap with 24 of 300 repeat scorings missing (a secondary metric only).
+\item Earlier internal analyses used windows defined by the longest run instead of the nominal budget; all reported tables are regenerated with the nominal budget (differences below 0.2\%).
+\end{enumerate}
+
+\section{Judge prompts}
+\label{app:prompts}
+All three formats share this instruction, followed by the format-specific request. Output is constrained to JSON by a schema; thinking level minimal.
+\begin{verbatim}
+You are judging the behaviour of a lunar lander in a simulator.
+Goal: land gently and upright on the landing pad, which is on flat ground
+between two flags at horizontal position x close to 0 (height 0 is the
+ground). Use little engine fuel. Do not crash or fly out of bounds. Coming
+to rest on the pad is the ideal outcome.
+Each description covers what happened from one moment until the end of the
+episode. Judge only how well that stretch achieves the goal.
+\end{verbatim}
+\begin{itemize}
+\item Score: ``Description: \dots\ Rate how well this achieves the goal from 0 (very bad) to 10 (ideal).''
+\item Compare: ``Description A: \dots\ Description B: \dots\ Which description better achieves the goal? Answer A, B, or SAME if they are about equally good.''
+\item Rank: ``Description A: \dots\ \dots\ Rank all $n$ descriptions from best to worst. Put descriptions that are about equally good in the same tier. Every letter must appear exactly once.''
+\end{itemize}
+An example description (first lines):
+\begin{verbatim}
+Lasts 400 more steps, then: the time limit was reached.
+Main engine fired on 56 steps, side engines on 128 steps.
+Snapshots:
+  +0 steps: x=-0.14, height=0.14, vx=-0.07, vy=-0.04, tilt=-3 deg, ...
+  +25 steps: x=-0.14, height=0.11, vx=+0.02, vy=-0.09, tilt=-2 deg, ...
+\end{verbatim}
+
+\section{Additional results}
+\label{app:results}
+
+\begin{table}[h]
+\centering
+\caption{Bandit diagnostics (5 arms, groups of 8, 20 seeds): number of seeds whose final policy picks the arm with the highest mean. In the skewed task one arm wins 90\% of comparisons but has a lower mean.}
+\label{tab:bandit}
+\small
+\adjustbox{max width=\linewidth}{\input{tables/app_bandit}}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Same-granularity comparison with and without per-step credit (5 seeds, seeds 0--4). Trajectory-level variants credit every step with the whole-trajectory signal.}
+\label{tab:phaseb}
+\small
+\setlength{\tabcolsep}{3pt}
+\adjustbox{max width=\linewidth}{\input{tables/app_phaseb}}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Hyperparameter grid: mean AUC over 10 seeds per setting (columns: learning rate, then update epochs).}
+\label{tab:sweep}
+\small
+\setlength{\tabcolsep}{3pt}
+\adjustbox{max width=\linewidth}{\input{tables/app_sweep}}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Acrobot under label noise (final return, 10 seeds; in parentheses the number of seeds ending below $-400$).}
+\label{tab:noise-acrobot}
+\small
+\setlength{\tabcolsep}{3pt}
+\adjustbox{max width=\linewidth}{\input{tables/app_noise_acrobot}}
+\end{table}
+
+\paragraph{Numerical checks of the theory.} Theorem~\ref{thm:multistep}: exact enumeration versus $4\times10^5$ sampled groups on five random MDPs with stochastic transitions, rewards and termination (all components within 2.02 standard errors; omitting $c_t$ is off by 14--124). Proposition~\ref{prop:detmdp}: 300 random deterministic MDPs with tied integer rewards, no failures in 1{,}670 / 2{,}176 / 277 cases. Proposition~\ref{prop:det}: a random search over $2\times10^5$ reward/policy pairs found that the mass on maximizers is not monotone in 3.2\% of cases, which is why the proposition states stability rather than monotone improvement.
+
 
 \end{document}

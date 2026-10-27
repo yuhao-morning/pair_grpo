@@ -1,0 +1,14 @@
+\begin{tabular}{llccccccccc}
+\toprule
+ & & \multicolumn{3}{c}{lr $10^{-4}$} & \multicolumn{3}{c}{lr $3\cdot10^{-4}$} & \multicolumn{3}{c}{lr $10^{-3}$} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}\cmidrule(lr){9-11}
+env & method & 4 & 10 & 20 & 4 & 10 & 20 & 4 & 10 & 20 \\
+\midrule
+LunarLander & PPO (scalar) & -1 & 61 & 104 & 57 & 114 & 147 & 117 & 137 & 149 \\
+LunarLander & GRPO (scalar) & 139 & 153 & 144 & 143 & 139 & 136 & 115 & 132 & 108 \\
+LunarLander & per-step comparisons & 146 & 155 & 150 & 154 & 155 & 147 & 134 & 148 & 118 \\
+Acrobot & PPO (scalar) & -190 & -181 & -181 & -189 & -177 & -163 & -180 & -161 & -166 \\
+Acrobot & GRPO (scalar) & -229 & -261 & -226 & -231 & -210 & -227 & -217 & -214 & -240 \\
+Acrobot & per-step comparisons & -231 & -204 & -237 & -233 & -207 & -237 & -229 & -242 & -280 \\
+\bottomrule
+\end{tabular}

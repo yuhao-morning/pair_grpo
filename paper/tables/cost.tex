@@ -1,0 +1,16 @@
+\begin{tabular}{lccl}
+\toprule
+ & per-step comparisons & GRPO (scalar) & verdict \\
+\midrule
+HalfCheetah 3M & $1481\pm162$ & $1622\pm208$ & inconclusive \\
+Hopper 3M & $1881\pm414$ & $1914\pm417$ & inconclusive \\
+LunarLander 2M & $262\pm4$ & $252\pm13$ & equivalent \\
+Acrobot 0.5M & $-128\pm94$ & $-129\pm93$ & inconclusive \\
+\midrule
+ & per-step comparisons & PPO (scalar + critic) & verdict \\
+\midrule
+LunarLander 3M & $262\pm4$ & $235\pm18$ & non-inferior, significantly better \\
+Hopper 5M & $2057\pm393$ & $1978\pm386$ & non-inferiority not established \\
+HalfCheetah 3M & $1481\pm162$ & $4488\pm1026$ & worse \\
+\bottomrule
+\end{tabular}

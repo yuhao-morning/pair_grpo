@@ -1,0 +1,10 @@
+\begin{tabular}{lccccc}
+\toprule
+ & GRPO (z-score) & linear & comparisons & comparisons, 30\% flips & tanh \\
+\midrule
+Gaussian noise & 20/20 & 20/20 & 20/20 & 20/20 & 20/20 \\
+heavy-tailed noise & 20/20 & 18/20 & 20/20 & 20/20 & 20/20 \\
+reward $\times1000$ & 20/20 & 14/20 & 20/20 & 20/20 & 20/20 \\
+skewed (win often, lose big) & 0/20 & 20/20 & 0/20 & 0/20 & 0/20 \\
+\bottomrule
+\end{tabular}
