@@ -9,6 +9,7 @@
 \usepackage{algorithm}
 \usepackage{algpseudocode}
 
+\newtheorem{theorem}{Theorem}
 \newtheorem{proposition}{Proposition}
 \newtheorem{lemma}{Lemma}
 \theoremstyle{remark}
@@ -25,7 +26,7 @@
 \maketitle
 
 \begin{abstract}
-\todo{Write last. Planned content: (1) setting --- an agent receives only ``which of two outcomes was better'' and never a scalar reward; (2) what the group-wise comparison advantage optimizes, and which label noise leaves its expected update intact; (3) a critic trained purely from comparisons that removes the state confound of per-step comparisons without changing the expected update; (4) pre-registered multi-seed results on six environments, including comparisons with reward-model-then-PPO and trajectory-level win-rate (SPO) baselines.}
+Policy-gradient methods need a scalar reward, yet for many tasks no formula captures what we want, while judging which of two outcomes is better is easy. We study reinforcement learning that receives only such comparisons --- no reward function, no reward model --- in multi-step tasks. Groups of trajectories start from a shared state, and each action is credited by how its reward-to-go compares with those of the other trajectories at the same time step. We show that the expected update is policy gradient with the reward-to-go replaced by its win rate against the population still running at that time, weighted by the chance that an opponent is still running; in deterministic environments the update ranks actions in the order of their true values, the optimal policy is stable, and improvable policies are not, whereas under stochastic outcomes it prefers actions that win more often rather than those with higher mean. Label noise concentrated near ties or caused by position bias leaves the expected update unchanged; only noise that also flips clear comparisons halves the signal. A critic trained from the same comparisons removes the state confound of per-step comparisons without changing the expected update. In a pre-registered study over six environments with ten seeds per claim, comparisons cost no detectable performance relative to scalar returns at the same granularity, learning a reward model from the same comparisons is not better and is worse when per-step rewards explain the comparisons poorly, and ten percent of the comparisons suffice when they are spent on a few time points with all pairs. With real LLM judges, comparisons are 7--10 points more accurate than pointwise scores, and the gap grows with the stronger judge. Comparisons do not close the gap to PPO with scalar rewards on HalfCheetah.
 \end{abstract}
 
 %=====================================================================
@@ -38,7 +39,7 @@ Using within-group win rates as the advantage in GRPO-style updates is not new; 
 
 \paragraph{Contributions.}
 \begin{enumerate}
-\item \textbf{What the ordinal update optimizes, and which noise hurts it} (Section~\ref{sec:theory}). The expected update ascends a win rate against the current policy; under deterministic rewards its only stable points are optimal, under stochastic rewards it can prefer a lower-mean action. Symmetric label noise that is concentrated near ties, and position bias, leave the expected update direction intact; only noise that also flips clear comparisons halves the signal. This predicts an experimental finding: at the same 25\% flip rate, independent flips collapse the method while near-tie and positional noise barely affect it.
+\item \textbf{What the ordinal update optimizes, and which noise hurts it} (Section~\ref{sec:theory}). In multi-step tasks the expected update is policy gradient with the reward-to-go replaced by its win rate against the trajectories still running at the same time step (Theorem~\ref{thm:multistep}); in deterministic environments it ranks actions by their true values, keeps the optimal policy stable and destabilizes improvable ones, while under stochastic outcomes it can prefer a lower-mean action. Symmetric label noise that is concentrated near ties, and position bias, leave the expected update direction intact; only noise that also flips clear comparisons halves the signal. This predicts an experimental finding: at the same 25\% flip rate, independent flips collapse the method while near-tie and positional noise barely affect it.
 \item \textbf{A comparison-trained critic as a control variate} (Section~\ref{sec:method}). Comparing reward-to-go across trajectories at the same time step mixes the value of the state with the quality of the action. We train a state ranker from the same comparisons with a Bradley--Terry loss and subtract the comparison it predicts from the states alone. Because the correction depends only on states and on an independent trajectory, the expected update is unchanged. Two variants that let a learned model supply the advantage fail, which yields a design rule: the advantage must keep the observed comparison.
 \item \textbf{A pre-registered empirical study} (Section~\ref{sec:experiments}). Every main claim has its criteria written before the runs, 10--15 seeds, and multiple-comparison correction; we report the negative results. Using comparisons instead of scalar returns has no detectable cost at the same granularity; with real LLM judges, comparisons are 7--10 points more accurate than pointwise scores, and the gap widens with the stronger judge; learning a reward model from the same comparisons is not better and is worse when per-step rewards explain the comparisons poorly; and 10\% of the comparisons suffice when they are spent on a few time points with all pairs. Comparisons do not close the gap to PPO on HalfCheetah, and they are not uniformly less sensitive to hyperparameters.
 \end{enumerate}
@@ -202,8 +203,57 @@ The difference is $\E[\nabla\log\pi(a^i_t\mid s^i_t)\,B]$ with $B=\frac{1}{|A_t|
 The variance reduction is that of a control variate: it is largest when $2\sigma(V(s^i)-V(s^j))-1$ approximates $\E[c^{ij}_t\mid s^i_t,s^j_t]$. If $V_\phi$ were trained on the current batch first, $B$ would depend on $a^i_t$ through the labels and the identity would fail.
 \end{remark}
 
-\subsection{Open: the multi-step objective}
-\todo{Characterize what the per-step update ascends. By the argument of Lemma~\ref{lem:unbiased}, at each $t$ it is the gradient of the win probability of the action's reward-to-go against the reward-to-go of an independent running trajectory at the same $t$, with the opponent population frozen. Open: fixed points and their relation to expected return; conditions (e.g.\ deterministic dynamics) under which the optimum is preserved; a multi-step version of Proposition~\ref{prop:skew}.}
+\subsection{The multi-step objective}
+\label{sec:multistep}
+We now characterize the per-step update \eqref{eq:pair} exactly. Let $T$ be the (random) length of a trajectory, $p_t=\Pr(T>t)$ the probability that it is still running at $t$, and for an independent trajectory $\tau'$ of the current policy from the same initial state define
+\begin{equation}
+\label{eq:ut}
+u_t(x)=\Pr\big(G'_t<x\,\big|\,T'>t\big)-\Pr\big(G'_t>x\,\big|\,T'>t\big),\qquad c_t=1-(1-p_t)^{K-1}.
+\end{equation}
+$u_t$ is the win rate of a reward-to-go value $x$ against the population of trajectories still running at time $t$; it is non-decreasing in $x$ and takes values in $[-1,1]$. $c_t$ is the probability that at least one of the other $K-1$ trajectories is still running at $t$.
+
+\begin{theorem}[Expected per-step comparison update]
+\label{thm:multistep}
+With $K$ trajectories that are independent after a shared initial state and noiseless labels, the per-step comparison estimator
+\[
+g=\sum_{i=1}^{K}\sum_{t<T_i}\nabla_\theta\log\pi_\theta(a^i_t\mid s^i_t)\,\hat A^i_t
+\]
+satisfies
+\[
+\E[g]=K\sum_{t}\E\Big[\mathbb{1}\{T>t\}\;c_t\,u_t(G_t)\;\nabla_\theta\log\pi_\theta(a_t\mid s_t)\Big].
+\]
+\end{theorem}
+\begin{proof}
+Fix $i$ and $t<T_i$. Let $N$ be the number of other trajectories still running at $t$; $N\sim\mathrm{Bin}(K-1,p_t)$ independently of $\tau^i$. Given $\tau^i$ and $N=n\ge1$, the reward-to-go values of the running opponents are i.i.d.\ draws from the law of $G'_t$ given $T'>t$, again independent of $\tau^i$, so $\E[\hat A^i_t\mid\tau^i,N=n]=u_t(G^i_t)$; for $n=0$, $\hat A^i_t=0$. Hence $\E[\hat A^i_t\mid\tau^i]=\Pr(N\ge1)\,u_t(G^i_t)=c_t\,u_t(G^i_t)$, and the score factor depends only on $\tau^i$. Summing over the $K$ exchangeable trajectories gives the claim.
+\end{proof}
+
+\begin{remark}[Reading of the theorem]
+Policy gradient with reward-to-go and a time-dependent baseline uses $\E[\sum_t\nabla\log\pi(a_t\mid s_t)(G_t-b_t)]$. The comparison update replaces $G_t$ by $c_t\,u_t(G_t)$: (i) a non-decreasing transform of the reward-to-go, so only its rank within the population at time $t$ matters; (ii) the same transform for every state at time $t$, which is why comparing trajectories that sit in different states is still a valid policy-gradient signal; (iii) a weight $c_t$ that shrinks late time steps reached by few trajectories. With noisy labels of the form of Proposition~\ref{prop:noise}, $u_t(x)$ becomes $\E[g(x-G'_t)\mid T'>t]$, which is still non-decreasing. For a policy with separate parameters $\theta_t$ per time step, the $\theta_t$-component of $\E[g]$ is $K c_t\,\nabla_{\theta_t}\E[\mathbb{1}\{T>t\}u_t(G_t)]$ with $u_t$ held fixed: each time step ascends the probability that its reward-to-go beats that of an independent running trajectory. Unless $u_t$ is affine, the sum of these per-time-step ascents need not be the gradient of a single objective.
+\end{remark}
+
+\begin{proposition}[Deterministic environments]
+\label{prop:detmdp}
+Let transitions and rewards be deterministic and the policy tabular, time-indexed and softmax. Then the expected drift of the logit $z_t(s,a)$ is $K c_t\,d_t(s)\,\pi_t(a\mid s)\big[\bar u_t(s,a)-\sum_b\pi_t(b\mid s)\bar u_t(s,b)\big]$ with $\bar u_t(s,a)=\E[u_t(G_t)\mid s_t=s,a_t=a]$ and $d_t$ the state distribution at $t$, and:
+\begin{enumerate}
+\item[(a)] \emph{Ordering.} If the policy after time $t$ is deterministic, then at any reachable state $s$, for actions $a,b$ with positive probability, $Q^\pi_t(s,a)>Q^\pi_t(s,b)$ implies $\bar u_t(s,a)>\bar u_t(s,b)$.
+\item[(b)] \emph{The optimal policy is stable.} Let $\pi^\star$ be a deterministic optimal policy and move probability $\varepsilon$ at an on-path pair $(t,s)$ to an action $a'$ with $Q^\star_t(s,a')<Q^\star_t(s,\pi^\star(s))$. Then the logit of $a'$ decreases.
+\item[(c)] \emph{Improvable policies are unstable.} Let $\pi$ be deterministic and let $a^+$ satisfy $Q^\pi_t(s,a^+)>V^\pi_t(s)$ at an on-path pair $(t,s)$. If probability $\varepsilon$ is moved to $a^+$, its logit increases.
+\end{enumerate}
+\end{proposition}
+\begin{proof}
+The drift formula is Theorem~\ref{thm:multistep} with $\partial_{z_t(s,a)}\log\pi_t(b\mid s)=\mathbb{1}[a=b]-\pi_t(a\mid s)$.
+(a) With deterministic dynamics and continuation, $G_t=Q^\pi_t(s,a)$ almost surely given $(s_t,a_t)=(s,a)$, so $\bar u_t(s,a)=u_t(Q^\pi_t(s,a))$. For $y>x$, $u_t(y)-u_t(x)=\Pr(G'_t\in[x,y))+\Pr(G'_t\in(x,y])\ge\Pr(G'_t=x)+\Pr(G'_t=y)$, and both point masses are positive because opponents pass through $(s,b)$ and $(s,a)$ with positive probability and then have exactly these values.
+(b) Opponents at time $t$ have $G'_t=G^\star_t$ with probability $1-\varepsilon$ and $Q^\star_t(s,a')<G^\star_t$ with probability $\varepsilon$. Hence $u_t(Q^\star_t(s,a'))=-(1-\varepsilon)$, $u_t(G^\star_t)=\varepsilon$, the state average is $0$, and the drift of $z_t(s,a')$ is $-K c_t\,\varepsilon(1-\varepsilon)<0$.
+(c) Symmetrically, $u_t(Q^\pi_t(s,a^+))=1-\varepsilon$, the state average is $0$, and the drift of $z_t(s,a^+)$ is $K c_t\,\varepsilon(1-\varepsilon)>0$.
+\end{proof}
+
+\begin{remark}[What is not covered]
+If a deterministic suboptimal policy has no improving action on its own path, the expected update gives no on-path signal; this is the same local structure as policy gradient near deterministic policies, so comparisons neither help nor hurt there. The deterministic-continuation assumption in (a) is needed: with a stochastic continuation the update ranks actions by $\E[u_t(G_t)]$ rather than by $u_t(\E[G_t])$, the multi-step form of Proposition~\ref{prop:skew}. In 300 random deterministic MDPs with fully stochastic policies, 2.1\% of ordered action pairs (107 of 5{,}011) were ranked opposite to $Q^\pi$. Global convergence with function approximation and stochastic dynamics remains open.
+\end{remark}
+
+\begin{remark}[Numerical checks]
+Theorem~\ref{thm:multistep} was checked on five random MDPs with stochastic transitions, rewards and early termination ($c_t$ as low as $0.19$, $K\in\{2,\dots,5\}$) by exact enumeration against $4\times10^5$ sampled groups: all components agree within $2.02$ Monte Carlo standard errors, while the same formula without $c_t$ is off by 14--124 standard errors. Proposition~\ref{prop:detmdp}(a)--(c) held in all 1{,}670, 2{,}176 and 277 cases on 300 random deterministic MDPs with deliberately tied integer rewards (\texttt{clean/theory\_check.py}, \texttt{clean/theory\_check2.py}).
+\end{remark}
 
 %=====================================================================
 \section{Experiments}
@@ -258,7 +308,7 @@ Hopper      & $1765\pm304$ & $1720\pm388$ & $1884\pm417$ & $2110\pm175$ & $511\p
 \bottomrule
 \end{tabular}
 \end{table}
-\todo{Text: model-only advantage rises fastest then collapses (policy exploits critic error); GiGPO reduces to trajectory-level grouping in continuous state; remaining 2$\times$ gap to PPO on HalfCheetah.}
+The critic variant is significantly better than the critic-free update on HalfCheetah ($p=0.013$, AUC $p=0.006$) and has the smallest seed-to-seed spread on Hopper, where the difference is not significant. Letting the learned model supply the advantage directly ($Q(s,a)-\E_{a'}Q(s,a')$, ``model-only'') learns fastest for about 1.2M steps and then degrades steadily while the critic's pairwise accuracy stays constant at about 0.67: the policy exploits errors of the critic along the action dimension, which pairwise accuracy between states does not measure. A doubly robust combination that keeps the observed comparison as a correction does not degrade but is not better than the state-ranker critic; an ablation attributes this to the critic type (a state value obtained by averaging a learned $Q$ over actions is a worse baseline than a directly learned $V$). GiGPO's anchor-state grouping finds repeated states only at the shared initial state in continuous control and reduces to trajectory-level grouping. Every comparison-only variant remains about $2\times$ below PPO on HalfCheetah.
 
 \subsection{Comparison with learning a reward model, and with trajectory-level win rate}
 \label{sec:exp-rm}
