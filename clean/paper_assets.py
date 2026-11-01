@@ -213,6 +213,36 @@ judge & score each & rank group & compare two & score ties & rank $-$ score & co
 \midrule
 """ + "\n".join(jl) + "\n\\bottomrule\n\\end{tabular}\n")
 
+# ---------------- 表：LunarLeft（没写进手写奖励的要求，金标准比较与 LLM 裁判训练） ----------------
+def left_events(path):
+    """最后 10 次更新：着陆率、坠毁率、左份额（非坠毁结束里 x < 0 的比例）。"""
+    d = pd.read_csv(path).tail(10); l, r = d.end_left.sum(), d.end_right.sum()
+    return d.landed.mean(), d.crashed.mean(), l / (l + r) if l + r else np.nan
+
+
+def mci(x):
+    x = np.asarray(x)[~np.isnan(x)]
+    h = stats.t.ppf(0.975, len(x) - 1) * x.std(ddof=1) / np.sqrt(len(x))
+    return f"${x.mean():.2f}\\pm{h:.2f}$"
+
+
+LL = [("hand-written reward", "PPO", "results/lunarleft_oracle", "ppo_hand", S10),
+      ("true objective", "PPO", "results/lunarleft_oracle", "ppo", S10),
+      ("oracle comparisons", "per-step, every step", "results/lunarleft_oracle", "pair_step", S10),
+      ("oracle comparisons", "per-step, every 20 steps", "results/lunarleft_oracle", "pair_step_L20", S10),
+      ("LLM judge, v1 descriptions", "per-step, every 20 steps", "results/judge", "pair_step_judge", range(1, 6)),
+      ("LLM judge, v2 descriptions", "per-step, every 20 steps", "results/judge_v2", "pair_step_judge", range(1, 6))]
+ll = []
+for src, alg, root, name, seeds in LL:
+    X = np.array([left_events(f"{root}/LunarLeft-v0/{name}/events_seed{s}.txt") for s in seeds])
+    left = mci(X[:, 2]) if np.isfinite(X[:, 2]).sum() > 1 else "---"
+    ll.append(f"{src} & {alg} & {len(X)} & {mci(X[:, 0])} & {mci(X[:, 1])} & {left}" + r" \\")
+write("lunarleft", r"""\begin{tabular}{llcccc}
+\toprule
+training signal & method & seeds & landed & crashed & left share \\
+\midrule
+""" + "\n".join(ll) + "\n\\bottomrule\n\\end{tabular}\n")
+
 # ================= 图 =================
 def curve_panel(ax, rs_by_method, total, title, ylabel):
     x = (np.arange(50) + 0.5) * total / 50 / 1e6

@@ -1,0 +1,12 @@
+\begin{tabular}{llcccc}
+\toprule
+training signal & method & seeds & landed & crashed & left share \\
+\midrule
+hand-written reward & PPO & 10 & $0.81\pm0.08$ & $0.05\pm0.02$ & $0.52\pm0.13$ \\
+true objective & PPO & 10 & $0.71\pm0.16$ & $0.05\pm0.02$ & $0.67\pm0.09$ \\
+oracle comparisons & per-step, every step & 10 & $0.96\pm0.03$ & $0.02\pm0.02$ & $0.74\pm0.15$ \\
+oracle comparisons & per-step, every 20 steps & 10 & $0.92\pm0.06$ & $0.02\pm0.01$ & $0.80\pm0.20$ \\
+LLM judge, v1 descriptions & per-step, every 20 steps & 5 & $0.00\pm0.00$ & $1.00\pm0.00$ & --- \\
+LLM judge, v2 descriptions & per-step, every 20 steps & 5 & $0.27\pm0.32$ & $0.30\pm0.07$ & $0.99\pm0.02$ \\
+\bottomrule
+\end{tabular}
