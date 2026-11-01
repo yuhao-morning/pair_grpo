@@ -14,3 +14,4 @@ __pycache__/
 .DS_Store
 .venv/
 MUJOCO_LOG.TXT
+llm/infra_local.md
