@@ -1,0 +1,114 @@
+diff --git a/agent_system/environments/env_manager.py b/agent_system/environments/env_manager.py
+index ab09dff..f07529a 100644
+--- a/agent_system/environments/env_manager.py
++++ b/agent_system/environments/env_manager.py
+@@ -673,6 +673,7 @@ def make_envs(config):
+                     'observation_mode': 'text', 
+                     'num_products': None, 
+                     'human_goals': config.env.webshop.human_goals,
++                    'graded_reward': config.env.webshop.get('graded_reward', False),
+                     'file_path': file_path,
+                     'attr_path': attr_path
+                     }
+diff --git a/agent_system/environments/env_package/webshop/envs.py b/agent_system/environments/env_package/webshop/envs.py
+index fdc2ce6..54bc1a3 100644
+--- a/agent_system/environments/env_package/webshop/envs.py
++++ b/agent_system/environments/env_package/webshop/envs.py
+@@ -34,6 +34,8 @@ class WebshopWorker:
+         sys.path.append(project_root)
+         from web_agent_site.envs import WebAgentTextEnv  # noqa: WPS433 (runtime import)
+         
++        env_kwargs = dict(env_kwargs)
++        self.graded_reward = env_kwargs.pop('graded_reward', False)   # E1：回合结束时奖励 = 10 × task score（llm/prereg.md 第 2 节）
+         env_kwargs['seed'] = seed
+         self.env = gym.make('WebAgentTextEnv-v0', **env_kwargs)
+     
+@@ -50,7 +52,7 @@ class WebshopWorker:
+             reward = 10.0
+         else:
+             info['won'] = False
+-            reward = 0
++            reward = 10.0 * reward if (self.graded_reward and done) else 0
+ 
+         return obs, reward, done, info
+     
+diff --git a/verl/trainer/config/ppo_trainer.yaml b/verl/trainer/config/ppo_trainer.yaml
+index d0f68ba..deee48f 100644
+--- a/verl/trainer/config/ppo_trainer.yaml
++++ b/verl/trainer/config/ppo_trainer.yaml
+@@ -314,3 +314,4 @@ env:
+   webshop:
+     use_small: True
+     human_goals: False
++    graded_reward: False # 回合结束时奖励 = 10 × task score（pair-GRPO 实验 E1）
+diff --git a/verl/trainer/ppo/ray_trainer.py b/verl/trainer/ppo/ray_trainer.py
+index d85e23a..586cb1b 100644
+--- a/verl/trainer/ppo/ray_trainer.py
++++ b/verl/trainer/ppo/ray_trainer.py
+@@ -61,6 +61,7 @@ from verl.utils.torch_functional import masked_mean
+ from verl.utils.tracking import ValidationGenerationsLogger
+ from verl.workers.rollout.async_server import AsyncLLMServerManager
+ from gigpo import core_gigpo
++from gigpo import pair_adv
+ 
+ from agent_system.multi_turn_rollout import TrajectoryCollector, adjust_batch
+ 
+@@ -94,6 +95,9 @@ class AdvantageEstimator(str, Enum):
+     RLOO = "rloo"
+     GRPO_PASSK = "grpo_passk"
+     GiGPO = 'gigpo'
++    PAIR_GRPO = 'pair_grpo'      # 比较版：只把组内减均值/除标准差换成组内平均符号（llm/prereg.md 第 3 节）
++    PAIR_GIGPO = 'pair_gigpo'
++    PAIR_STEP = 'pair_step'
+ 
+ 
+ @dataclass
+@@ -357,6 +361,20 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
+             )
+         data.batch['advantages'] = advantages
+         data.batch['returns'] = returns
++    elif adv_estimator in (AdvantageEstimator.PAIR_GRPO, AdvantageEstimator.PAIR_GIGPO, AdvantageEstimator.PAIR_STEP):
++        # 每个步样本一个数：R = 回合回报 + 本步惩罚（同 GRPO/GiGPO 的回合项），G = 折扣回报（同 GiGPO 的步项）
++        R = data.batch['token_level_rewards'].sum(dim=-1).cpu().numpy()
++        uid = data.non_tensor_batch['uid']
++        if adv_estimator == AdvantageEstimator.PAIR_GRPO:
++            A = pair_adv.pair_grpo(R, uid)
++        elif adv_estimator == AdvantageEstimator.PAIR_GIGPO:
++            A = pair_adv.pair_gigpo(R, data.batch['step_rewards'].cpu().numpy(), uid, data.non_tensor_batch['anchor_obs'], w=step_advantage_w)
++        else:
++            A = pair_adv.pair_step(data.batch['step_rewards'].cpu().numpy(), uid, data.non_tensor_batch['turn_idx'])
++        A = torch.as_tensor(pair_adv.batch_scale(A), dtype=torch.float32, device=data.batch['response_mask'].device)
++        advantages = A.unsqueeze(-1) * data.batch['response_mask']
++        data.batch['advantages'] = advantages
++        data.batch['returns'] = advantages
+     else:
+         raise NotImplementedError
+     return data
+@@ -451,7 +469,10 @@ class RayPPOTrainer:
+             AdvantageEstimator.REMAX,
+             AdvantageEstimator.RLOO,
+             AdvantageEstimator.REINFORCE_PLUS_PLUS_BASELINE,
+-            AdvantageEstimator.GiGPO
++            AdvantageEstimator.GiGPO,
++            AdvantageEstimator.PAIR_GRPO,
++            AdvantageEstimator.PAIR_GIGPO,
++            AdvantageEstimator.PAIR_STEP,
+         ]:
+             self.use_critic = False
+         else:
+@@ -1108,12 +1129,14 @@ class RayPPOTrainer:
+                     del batch
+                     batch = gen_batch_output
+ 
+-                    if self.config.algorithm.adv_estimator == AdvantageEstimator.GiGPO:
++                    if self.config.algorithm.adv_estimator in (AdvantageEstimator.GiGPO, AdvantageEstimator.PAIR_GIGPO, AdvantageEstimator.PAIR_STEP):
+                         step_rewards_tensor = core_gigpo.compute_step_discounted_returns(
+                             batch=batch,
+                             gamma=self.config.algorithm.gamma
+                         )
+                         batch.batch['step_rewards'] = step_rewards_tensor
++                    # 回合序号：必须在 adjust_batch / _balance_batch 打乱顺序之前算
++                    batch.non_tensor_batch['turn_idx'] = pair_adv.turn_index(batch.non_tensor_batch['traj_uid'])
+                     
+                     batch = adjust_batch(self.config, batch)
+ 

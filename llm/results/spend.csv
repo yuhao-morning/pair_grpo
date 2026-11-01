@@ -1,0 +1,2 @@
+space,instance,price_per_hour,start_utc,stop_utc,note
+pg-01,ml.p5.4xlarge,7.912,2026-11-01T01:37:29Z,,Phase 0 setup
