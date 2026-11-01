@@ -19,8 +19,10 @@ import lunar_left  # noqa: E402,F401
 from calib_data import load_policy  # noqa: E402
 from phase_b import discounted_to_go  # noqa: E402
 
-OUT = "results/calib_left"
-STAGES, GROUPS, L, PER_STAGE, K = [250000, 500000, 1000000], 12, 20, 50, 8
+VER = os.environ.get("CALIB_VER", "v1")   # v1：第一次校准（只到左右与坠毁判据）；v2：加入早期阶段与"坠毁 vs 坠毁"判据
+OUT = "results/calib_left" if VER == "v1" else "results/calib_left_v2"
+STAGES = [250000, 500000, 1000000] if VER == "v1" else [0, 100000, 250000, 500000, 1000000]
+GROUPS, L, PER_STAGE, K = 12, 20, 50, 8
 
 
 def rollout(actor, norm, seed):
@@ -59,7 +61,8 @@ def data():
         for c in rng.choice(len(cand), min(PER_STAGE, len(cand)), replace=False):
             t, tr, alive = cand[c]
             items.append(dict(item=len(items), stage=stage, t=int(t), suffixes=[
-                dict(summary=jl.summary_short(tr[i]["obs"], tr[i]["acts"], tr[i]["end"], t), end=tr[i]["end"],
+                dict(summary=jl.summary_short(tr[i]["obs"], tr[i]["acts"], tr[i]["end"], t),
+                     summary_v2=jl.summary_v2(tr[i]["obs"], tr[i]["acts"], tr[i]["end"], t), end=tr[i]["end"],
                      x_end=float(tr[i]["obs"][-1][0]), G=float(discounted_to_go(tr[i]["rews"], 0.99)[t])) for i in alive]))
     with open(f"{OUT}/items.jsonl", "w") as f:
         for it in items:
@@ -74,22 +77,24 @@ def judge(cap=2.0):
     cj.configure("gemini-3.5-flash-lite", OUT)
     items = [json.loads(l) for l in open(f"{OUT}/items.jsonl")]
     J = cj.Judge(cap)
-    rng = random.Random(0)
-    jobs = []
-    for it in items:
-        order = list(range(len(it["suffixes"]))); rng.shuffle(order)
-        for o in (order, order[::-1]):
-            jobs.append((it["item"], o, *jl.rank_prompt([it["suffixes"][k]["summary"] for k in o])))
-    with ThreadPoolExecutor(8) as ex:
-        outs = list(ex.map(lambda j: (j[0], j[1], J(j[2], j[3])), jobs))
-    json.dump([[i, o, out] for i, o, out in outs], open(f"{OUT}/judgments.json", "w"))
+    for key in (["summary"] if VER == "v1" else ["summary", "summary_v2"]):
+        rng = random.Random(0)
+        jobs = []
+        for it in items:
+            order = list(range(len(it["suffixes"]))); rng.shuffle(order)
+            for o in (order, order[::-1]):
+                jobs.append((it["item"], o, *jl.rank_prompt([it["suffixes"][k][key] for k in o])))
+        with ThreadPoolExecutor(8) as ex:
+            outs = list(ex.map(lambda j: (j[0], j[1], J(j[2], j[3])), jobs))
+        name = "judgments.json" if key == "summary" else "judgments_v2.json"
+        json.dump([[i, o, out] for i, o, out in outs], open(f"{OUT}/{name}", "w"))
     print(f"调用 {J.calls}，累计 ${J.spent:.3f}")
 
 
-def analyze():
+def analyze(name="judgments.json"):
     items = {it["item"]: it for it in (json.loads(l) for l in open(f"{OUT}/items.jsonl"))}
-    J = json.load(open(f"{OUT}/judgments.json"))
-    lr, crash, allp, invalid = [], [], [], 0
+    J = json.load(open(f"{OUT}/{name}"))
+    lr, crash, allp, invalid, cc = [], [], [], 0, []
     for i, order, out in J:
         rank = jl.tiers_to_rank(out, len(order))
         if rank is None:
@@ -109,6 +114,8 @@ def analyze():
                 if ea["end"] != "crashed" and eb["end"] != "crashed" and np.sign(ea["x_end"]) != np.sign(eb["x_end"]):
                     want = 1 if ea["x_end"] < 0 else -1
                     lr.append(0.5 if j == 0 else float(j == want))
+                if ea["end"] == "crashed" and eb["end"] == "crashed" and abs(S[a]["G"] - S[b]["G"]) >= 20:
+                    cc.append(eff)
                 if (ea["end"] == "crashed") != (eb["end"] == "crashed"):
                     want = -1 if ea["end"] == "crashed" else 1
                     crash.append(0.5 if j == 0 else float(j == want))
@@ -116,8 +123,13 @@ def analyze():
     print(f"主判据——左右对立（都未坠毁）选左的有效准确率：{np.mean(lr):.3f}（n={len(lr)}）")
     print(f"坠毁 vs 未坠毁 选未坠毁：{np.mean(crash):.3f}（n={len(crash)}）")
     print(f"对金标准 G 的总体有效准确率：{np.mean(allp):.3f}（n={len(allp)}）")
-    print("判定：" + ("通过（≥0.90），进入试点" if np.mean(lr) >= 0.90 else "未通过，不进入试点"))
+    print(f"坠毁 vs 坠毁（|ΔG| ≥ 20）对金标准的有效准确率：{np.mean(cc):.3f}（n={len(cc)}）")
+    if VER == "v1":
+        print("判定：" + ("通过（≥0.90），进入试点" if np.mean(lr) >= 0.90 else "未通过，不进入试点"))
+    else:
+        ok = np.mean(lr) >= 0.90 and np.mean(cc) >= 0.75
+        print("判定（v2 判据：左右 ≥ 0.90 且 坠毁对 ≥ 0.75）：" + ("通过，进入试点" if ok else "未通过，不进入试点"))
 
 
 if __name__ == "__main__":
-    {"data": data, "judge": judge, "analyze": analyze}[sys.argv[1]]()
+    {"data": data, "judge": judge, "analyze": analyze}[sys.argv[1]](*sys.argv[2:])

@@ -32,6 +32,27 @@ def summary_short(obs, acts, end, t):
             f"Snapshots (x, height, tilt): {snaps}.")
 
 
+def summary_v2(obs, acts, end, t):
+    """v2：v1 缺速度和触地信息，全部坠毁时裁判无法区分"差点着陆"和"高速撞地"（试点 v1 失败的原因）。
+    每帧给 (x, 高度, 水平速度, 竖直速度, 倾角, 触地的腿)，并单列结束前最后一帧的速度。"""
+    n = len(acts)
+    idx = list(range(t, n, 40)) + [n]
+    if len(idx) > 5:
+        idx = [idx[int(round(k))] for k in np.linspace(0, len(idx) - 1, 5)]
+    legs = lambda o: {(0, 0): "none", (1, 0): "left", (0, 1): "right", (1, 1): "both"}[(int(o[6] > 0.5), int(o[7] > 0.5))]
+    last = obs[n - 1]
+    a = np.asarray(acts[t:])
+    snaps = "; ".join(f"+{s - t}: ({obs[s][0]:+.2f}, {obs[s][1]:.2f}, {obs[s][2]:+.2f}, {obs[s][3]:+.2f}, "
+                      f"{np.degrees(obs[s][4]):+.0f} deg, {legs(obs[s])})" for s in idx)
+    return (f"Lasts {n - t} more steps, then: {END[end]}, final x={obs[n][0]:+.2f}, height={obs[n][1]:.2f}; "
+            f"just before the end: vx={last[2]:+.2f}, vy={last[3]:+.2f}, tilt={np.degrees(last[4]):+.0f} deg, legs touching: {legs(last)}. "
+            f"Main engine {int((a == 2).sum())} steps, side engines {int(((a == 1) | (a == 3)).sum())} steps. "
+            f"Snapshots (x, height, vx, vy, tilt, legs): {snaps}.")
+
+
+SUMMARY = {"v1": summary_short, "v2": summary_v2}
+
+
 def rank_prompt(sums):
     body = "\n\n".join(f"Description {cj.LETTERS[k]}:\n{s}" for k, s in enumerate(sums))
     return (f"{SPEC_LEFT}\n\n{body}\n\nRank all {len(sums)} descriptions from best to worst. Put descriptions that are "

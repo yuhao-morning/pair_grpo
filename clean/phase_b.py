@@ -210,7 +210,7 @@ def judge_fill(a, JG, ADV, judge, rng, jf, step):
                 info = tr["ev"][-1]
                 end = "crashed" if info.get("crashed") else ("landed" if info.get("landed") else "timeout")
                 obs = np.array(tr["o"] + [tr["last"]])
-                sums.append(jl.summary_short(obs, np.array(tr["a"]), end, t))
+                sums.append(jl.SUMMARY[a.judge_summary](obs, np.array(tr["a"]), end, t))
             order = list(rng.permutation(len(alive)))
             reqs.append((gi, t, alive, order, *jl.rank_prompt([sums[k] for k in order])))
 
@@ -287,7 +287,8 @@ def main():
     p.add_argument("--rm_epochs", type=int, default=2)       # rm_ppo：每次更新在缓冲区上训练几轮
     p.add_argument("--spo_queue", type=int, default=64)      # spo：比较队列长度 B（论文 10–100）
     p.add_argument("--judge", default="")                   # 非空：pair_step 的标签由该 LLM 裁判给出（LunarLeft-v0）
-    p.add_argument("--judge_cap", type=float, default=6.0)  # 每个运行的裁判花费上限（美元，按付费价）
+    p.add_argument("--judge_cap", type=float, default=6.0)
+    p.add_argument("--judge_summary", default="v1", choices=["v1", "v2"])   # v1 试点用的精简摘要；v2 加了速度和触地  # 每个运行的裁判花费上限（美元，按付费价）
     p.add_argument("--shaping", type=float, default=0.0)   # 势函数整形系数（只加在标量训练奖励上；Courier 用）
     p.add_argument("--train_reward", default="env", choices=["env", "naive", "common", "hand"])  # 训练用哪种奖励；日志始终记环境回报
     p.add_argument("--save_at", type=int, nargs="*", default=[])  # 在这些步数保存策略（采这一批数据时的参数）
